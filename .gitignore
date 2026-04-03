@@ -1,1 +1,3 @@
 venv/
+BGL.log
+parsed.parquet
