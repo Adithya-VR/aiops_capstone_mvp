@@ -1,0 +1,8 @@
+drain3==0.9.11
+pandas==2.2.0
+pyarrow==15.0.0
+duckdb==0.10.0
+scikit-learn==1.4.0
+streamlit==1.31.0
+plotly==5.18.0
+numpy==1.26.4
