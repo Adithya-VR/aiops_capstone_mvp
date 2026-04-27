@@ -16,8 +16,15 @@ parsed = pd.read_parquet(PARSED, engine="pyarrow")
 
 # ── Step 1: Generate alerts from anomalous windows ────────────────
 # An alert = one anomalous window with its most common fatal template
-p95 = scores["anomaly_score"].quantile(0.95)
-p85 = scores["anomaly_score"].quantile(0.85)
+# p95 = scores["anomaly_score"].quantile(0.95)
+# p85 = scores["anomaly_score"].quantile(0.85)
+# p70 = scores["anomaly_score"].quantile(0.70)
+
+# Compute percentiles from anomalous windows only
+# so severity levels distribute meaningfully across alerts
+p95 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.95)
+p85 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.85)
+p70 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.70)
 
 anomalous = scores[scores["predicted"] == 1].copy()
 print(f"  Anomalous windows: {len(anomalous):,}")
@@ -44,12 +51,21 @@ for _, row in anomalous.iterrows():
                  if len(anom_logs) > 0 else "INFO")
 
     # Assign severity based on score percentile
+    # if row["anomaly_score"] >= p95:
+    #     severity = "CRITICAL"
+    # elif row["anomaly_score"] >= p85:
+    #     severity = "HIGH"
+    # else:
+    #     severity = "MEDIUM"
+
     if row["anomaly_score"] >= p95:
-        severity = "CRITICAL"
+        severity = "CRITICAL"      # top 5%  — most dangerous
     elif row["anomaly_score"] >= p85:
-        severity = "HIGH"
+        severity = "HIGH"          # next 10% — serious
+    elif row["anomaly_score"] >= p70:
+        severity = "MEDIUM"        # next 15% — moderate
     else:
-        severity = "MEDIUM"
+        severity = "LOW"           # bottom 70% of anomalies — minor
 
     alerts.append({
         "window_start":   row["window_start"],
@@ -68,7 +84,7 @@ print(f"  Alerts generated: {len(alert_df):,}")
 print(f"  CRITICAL: {(alert_df['severity']=='CRITICAL').sum()}")
 print(f"  HIGH    : {(alert_df['severity']=='HIGH').sum()}")
 print(f"  MEDIUM  : {(alert_df['severity']=='MEDIUM').sum()}")
-
+print(f"  LOW  : {(alert_df['severity']=='LOW').sum()}")
 # ── Step 2: Cluster alerts by template similarity ─────────────────
 # Convert templates to TF-IDF style vectors then cluster with DBSCAN
 # No heavy models needed — just token overlap similarity

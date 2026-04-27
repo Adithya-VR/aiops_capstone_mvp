@@ -5,6 +5,17 @@ import plotly.graph_objects as go
 import duckdb
 from pathlib import Path
 
+from datetime import datetime
+
+def unix_to_readable(ts):
+    """Convert Unix timestamp to readable string."""
+    try:
+        return datetime.utcfromtimestamp(int(ts)).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+    except Exception:
+        return str(ts)
+
 st.set_page_config(
     page_title="AIOps — BGL Anomaly Detection",
     page_icon="🔍",
@@ -130,17 +141,19 @@ with t1:
 with t2:
     st.header("Log Explorer")
 
+    # ── Filters ───────────────────────────────────────────────────
     c1, c2, c3 = st.columns(3)
-    f_show  = c1.selectbox(
+    f_show   = c1.selectbox(
         "Show", ["All", "Anomalies only", "Normal only"]
     )
-    f_level = c2.multiselect(
+    f_level  = c2.multiselect(
         "Log Level",
         options=sorted(parsed["level"].unique().tolist()),
         default=sorted(parsed["level"].unique().tolist())
     )
     f_search = c3.text_input("Search in content", "")
 
+    # ── Apply filters ─────────────────────────────────────────────
     view = parsed.copy()
     if f_show == "Anomalies only":
         view = view[view["is_anomaly"] == 1]
@@ -155,10 +168,78 @@ with t2:
             )
         ]
 
-    st.caption(f"Showing {min(len(view), 500):,} of {len(view):,} rows")
+    total_rows  = len(view)
+    page_size   = 500
+    total_pages = max(1, (total_rows + page_size - 1) // page_size)
 
+    # ── Pagination controls ───────────────────────────────────────
+    st.caption(f"**{total_rows:,} rows** match your filters")
+
+    col_info, col_prev, col_page, col_next = st.columns([3, 1, 2, 1])
+
+    with col_info:
+        st.write(f"Page size: {page_size} rows per page")
+
+    # Use session state to remember current page
+    if "log_page" not in st.session_state:
+        st.session_state.log_page = 1
+
+    # Reset to page 1 when filters change
+    filter_key = f"{f_show}_{f_level}_{f_search}"
+    if "last_filter" not in st.session_state:
+        st.session_state.last_filter = filter_key
+    if st.session_state.last_filter != filter_key:
+        st.session_state.log_page   = 1
+        st.session_state.last_filter = filter_key
+
+    with col_prev:
+        if st.button("◀ Prev",
+                     disabled=st.session_state.log_page <= 1):
+            st.session_state.log_page -= 1
+            st.rerun()
+
+    with col_page:
+        st.write(
+            f"**Page {st.session_state.log_page}"
+            f" of {total_pages}**"
+        )
+
+    with col_next:
+        if st.button("Next ▶",
+                     disabled=st.session_state.log_page >= total_pages):
+            st.session_state.log_page += 1
+            st.rerun()
+
+    # ── Jump to page ──────────────────────────────────────────────
+    jump = st.number_input(
+        "Jump to page",
+        min_value=1,
+        max_value=total_pages,
+        value=st.session_state.log_page,
+        step=1,
+        key="page_jump"
+    )
+    if jump != st.session_state.log_page:
+        st.session_state.log_page = int(jump)
+        st.rerun()
+
+    # ── Slice the data for current page ───────────────────────────
+    page     = st.session_state.log_page
+    start    = (page - 1) * page_size
+    end      = start + page_size
+    page_view = view.iloc[start:end]
+
+    start_row = start + 1
+    end_row   = min(end, total_rows)
+    st.caption(
+        f"Showing rows **{start_row:,} – {end_row:,}** "
+        f"of **{total_rows:,}**"
+    )
+
+    # ── Display ───────────────────────────────────────────────────
     def highlight(row):
-        color = "background-color: #ffcccc" if row["is_anomaly"] else ""
+        color = ("background-color: #ffcccc"
+                 if row["is_anomaly"] else "")
         return [color] * len(row)
 
     display_cols = [
@@ -166,12 +247,23 @@ with t2:
         "is_anomaly", "template", "content"
     ]
     st.dataframe(
-        view[display_cols]
-        .head(500)
+        page_view[display_cols]
         .style.apply(highlight, axis=1),
         use_container_width=True,
         height=450
     )
+
+    # ── Quick stats for current filter ───────────────────────────
+    st.divider()
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("Filtered rows",    f"{total_rows:,}")
+    sc2.metric("Anomalous",
+               f"{view['is_anomaly'].sum():,}")
+    sc3.metric("Normal",
+               f"{(view['is_anomaly']==0).sum():,}")
+    sc4.metric("Anomaly rate",
+               f"{view['is_anomaly'].mean():.2%}"
+               if total_rows > 0 else "N/A")
 
 # ══════════════════════════════════════════════════════════════════
 # TAB 3 — ANOMALY TIMELINE
@@ -179,18 +271,21 @@ with t2:
 with t3:
     st.header("Anomaly Timeline")
 
+    # Convert timestamps to readable format
+    scores["window_dt"] = scores["window_start"].apply(unix_to_readable)
+
     flagged = scores[scores["anomaly_score"] >= thresh]
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=scores["window_start"],
+        x=scores["window_dt"],
         y=scores["anomaly_score"],
         mode="lines",
         name="Anomaly Score",
         line=dict(color="#7F77DD", width=1)
     ))
     fig.add_trace(go.Scatter(
-        x=flagged["window_start"],
+        x=flagged["window_dt"],
         y=flagged["anomaly_score"],
         mode="markers",
         name="Flagged",
@@ -201,7 +296,7 @@ with t3:
         annotation_text=f"Threshold: {thresh:.2f}"
     )
     fig.update_layout(
-        xaxis_title="Time (Unix seconds)",
+        xaxis_title="Time (UTC)",
         yaxis_title="Anomaly Score",
         height=400,
         legend=dict(orientation="h", yanchor="bottom", y=1.02)
@@ -252,6 +347,7 @@ with t4:
 
     p95 = float(scores["anomaly_score"].quantile(0.95))
     p85 = float(scores["anomaly_score"].quantile(0.85))
+    p70 = float(scores["anomaly_score"].quantile(0.70))
     top = scores.nlargest(top_n, "anomaly_score")
 
     for _, row in top.iterrows():
@@ -260,14 +356,16 @@ with t4:
             sev = "🔴 CRITICAL"
         elif score >= p85:
             sev = "🟠 HIGH"
-        else:
+        elif score >= p70:
             sev = "🟡 MEDIUM"
+        else:
+            sev = "🟢 LOW"    
 
         label = (
             f"{sev}  |  "
             f"Score: {score:.3f}  |  "
             f"Anomalous lines: {int(row['anomaly_count'])}  |  "
-            f"Window start: {int(row['window_start'])}"
+            f"{unix_to_readable(row['window_start'])}"
         )
 
         with st.expander(label):
@@ -335,7 +433,8 @@ with t5:
         color_map = {
             "CRITICAL": "#E24B4A",
             "HIGH":     "#EF9F27",
-            "MEDIUM":   "#EDD94C"
+            "MEDIUM":   "#EDD94C",
+            "LOW":      "#4CAF50"    # green for low severity
         }
         fig = px.bar(
             sev, x="severity", y="count",
@@ -372,14 +471,15 @@ with t5:
 
     # Group alerts by cluster and show expandable detail
     for cid in sorted(alerts["cluster_id"].unique()):
-        group = alerts[alerts["cluster_id"] == cid]
-        label = group["cluster_label"].iloc[0]
-        worst = group["anomaly_score"].max()
+        group      = alerts[alerts["cluster_id"] == cid]
+        label      = group["cluster_label"].iloc[0]
+        worst      = group["anomaly_score"].max()
         sev_counts = group["severity"].value_counts().to_dict()
 
         icon = ("🔴" if "CRITICAL" in sev_counts
                 else "🟠" if "HIGH" in sev_counts
-                else "🟡")
+                else "🟡" if "MEDIUM" in sev_counts
+                else "🟢")
 
         title = (
             f"{icon} {'Cluster ' + str(cid) if cid >= 0 else 'Unique'}  |  "
@@ -393,14 +493,22 @@ with t5:
             c1.metric("Alerts in cluster", len(group))
             c2.metric("Max anomaly score", f"{worst:.3f}")
             c3.metric("Critical alerts",
-                      sev_counts.get("CRITICAL", 0))
+                       sev_counts.get("CRITICAL", 0))
 
+            # Readable timestamps — all indented inside expander
+            display_group = group[[
+                "window_start", "anomaly_score",
+                "severity", "anomaly_count",
+                "total_logs", "top_template"
+            ]].copy()
+            display_group["window_start"] = (
+                display_group["window_start"].apply(unix_to_readable)
+            )
+            display_group = display_group.rename(
+                columns={"window_start": "time (UTC)"}
+            )
             st.dataframe(
-                group[[
-                    "window_start", "anomaly_score",
-                    "severity", "anomaly_count",
-                    "total_logs", "top_template"
-                ]].sort_values(
+                display_group.sort_values(
                     "anomaly_score", ascending=False
                 ),
                 use_container_width=True

@@ -1,0 +1,28 @@
+{
+  "dataset": "bgl",
+  "total_windows": 5773,
+  "anomalous_windows": 758,
+  "normal_windows": 5015,
+  "precision_anomaly": 0.7219,
+  "recall_anomaly": 0.4657,
+  "f1_anomaly": 0.5662,
+  "precision_normal": 0.9234,
+  "recall_normal": 0.9729,
+  "f1_normal": 0.9475,
+  "accuracy": 0.9063,
+  "roc_auc": 0.8836,
+  "macro_avg_f1": 0.7568,
+  "best_threshold": 0.3331,
+  "confusion_matrix": {
+    "true_negative": 4879,
+    "false_positive": 136,
+    "false_negative": 405,
+    "true_positive": 353
+  },
+  "score_min": 0.2947,
+  "score_max": 0.6778,
+  "score_mean": 0.3105,
+  "score_p85": 0.3174,
+  "score_p90": 0.3277,
+  "score_p95": 0.3715
+}
