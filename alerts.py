@@ -105,7 +105,7 @@ X = normalize(X)   # L2 normalize for cosine similarity
 
 # DBSCAN — no need to specify number of clusters
 # eps=0.4 means templates need 60%+ similarity to cluster together
-clusterer = DBSCAN(eps=0.4, min_samples=2, metric="cosine")
+clusterer = DBSCAN(eps=0.5, min_samples=2, metric="cosine")
 labels    = clusterer.fit_predict(X)
 
 alert_df["cluster_id"] = labels

@@ -443,28 +443,103 @@ with t5:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+    # with col2:
+    #     st.subheader("Top 10 Clusters by Size")
+    #     cluster_summary = (
+    #         alerts[alerts["cluster_id"] >= 0]
+    #         .groupby("cluster_label")
+    #         .size()
+    #         .reset_index(name="count")
+    #         .sort_values("count", ascending=False)
+    #         .head(10)
+    #     )
+    #     cluster_summary["label_short"] = (
+    #         cluster_summary["cluster_label"].str[:45]
+    #     )
+    #     fig2 = px.bar(
+    #         cluster_summary,
+    #         x="count", y="label_short",
+    #         orientation="h",
+    #         color="count",
+    #         color_continuous_scale="Reds"
+    #     )
+    #     fig2.update_layout(yaxis_title="", height=380)
+    #     st.plotly_chart(fig2, use_container_width=True)
+
+    #The above code is replace by below code to display top 10 clusters by size with the content
     with col2:
         st.subheader("Top 10 Clusters by Size")
+
+        # Build cluster summary with actual content
+        # For each cluster get the most representative actual log line
+        cluster_rows = []
+        for cid in alerts[alerts["cluster_id"] >= 0]["cluster_id"].unique():
+            grp = alerts[alerts["cluster_id"] == cid]
+
+            # Get the top window for this cluster
+            top_win = grp.nlargest(1, "anomaly_score").iloc[0]
+
+            # Look up actual log content from parsed data
+            actual = parsed[
+                (parsed["timestamp"] >= top_win["window_start"]) &
+                (parsed["timestamp"] <  top_win["window_end"]) &
+                (parsed["is_anomaly"] == 1)
+            ]
+
+            if actual.empty:
+                actual = parsed[
+                    (parsed["timestamp"] >= top_win["window_start"]) &
+                    (parsed["timestamp"] <  top_win["window_end"])
+                ]
+
+            # Use most common content line as cluster label
+            if not actual.empty:
+                rep_content = (actual["content"]
+                            .value_counts().index[0])
+                # Clean it up — truncate long lines
+                rep_label = rep_content[:55] + "..." \
+                            if len(rep_content) > 55 \
+                            else rep_content
+            else:
+                rep_label = grp["cluster_label"].iloc[0][:55]
+
+            cluster_rows.append({
+                "cluster_id":   cid,
+                "count":        len(grp),
+                "label":        rep_label,
+                "max_score":    grp["anomaly_score"].max(),
+                "critical":     (grp["severity"] == "CRITICAL").sum()
+            })
+
         cluster_summary = (
-            alerts[alerts["cluster_id"] >= 0]
-            .groupby("cluster_label")
-            .size()
-            .reset_index(name="count")
+            pd.DataFrame(cluster_rows)
             .sort_values("count", ascending=False)
             .head(10)
         )
-        cluster_summary["label_short"] = (
-            cluster_summary["cluster_label"].str[:45]
-        )
+
         fig2 = px.bar(
             cluster_summary,
-            x="count", y="label_short",
+            x="count",
+            y="label",
             orientation="h",
-            color="count",
-            color_continuous_scale="Reds"
+            color="max_score",
+            color_continuous_scale="Reds",
+            hover_data=["critical", "max_score"],
+            labels={
+                "count":     "Alert Count",
+                "label":     "Representative Error",
+                "max_score": "Max Score",
+                "critical":  "Critical Alerts"
+            }
         )
-        fig2.update_layout(yaxis_title="", height=380)
+        fig2.update_layout(
+            yaxis_title="",
+            height=420,
+            coloraxis_colorbar=dict(title="Max Score")
+        )
         st.plotly_chart(fig2, use_container_width=True)
+
+    # This till the end of block of code that replaced the code to display top 10 clusters by size with the content
 
     st.divider()
     st.subheader("All Alert Clusters")
@@ -488,28 +563,399 @@ with t5:
             f"{label[:50]}"
         )
 
+        # with st.expander(title):
+        #     c1, c2, c3 = st.columns(3)
+        #     c1.metric("Alerts in cluster", len(group))
+        #     c2.metric("Max anomaly score", f"{worst:.3f}")
+        #     c3.metric("Critical alerts",
+        #                sev_counts.get("CRITICAL", 0))
+
+            # Readable timestamps — all indented inside expander
+            # display_group = group[[
+            #     "window_start", "anomaly_score",
+            #     "severity", "anomaly_count",
+            #     "total_logs", "top_template"
+            # ]].copy()
+            # display_group["window_start"] = (
+            #     display_group["window_start"].apply(unix_to_readable)
+            # )
+            # display_group = display_group.rename(
+            #     columns={"window_start": "time (UTC)"}
+            # )
+            # st.dataframe(
+            #     display_group.sort_values(
+            #         "anomaly_score", ascending=False
+            #     ),
+            #     use_container_width=True
+            # )
+
         with st.expander(title):
             c1, c2, c3 = st.columns(3)
             c1.metric("Alerts in cluster", len(group))
             c2.metric("Max anomaly score", f"{worst:.3f}")
             c3.metric("Critical alerts",
-                       sev_counts.get("CRITICAL", 0))
+                      sev_counts.get("CRITICAL", 0))
 
-            # Readable timestamps — all indented inside expander
-            display_group = group[[
-                "window_start", "anomaly_score",
-                "severity", "anomaly_count",
-                "total_logs", "top_template"
-            ]].copy()
-            display_group["window_start"] = (
-                display_group["window_start"].apply(unix_to_readable)
-            )
-            display_group = display_group.rename(
-                columns={"window_start": "time (UTC)"}
-            )
+            # ── ONE merged table showing all alerts ────────────────
+            rows = []
+            for _, alert_row in group.sort_values(
+                "anomaly_score", ascending=False
+            ).iterrows():
+
+                # Get lines that match the cluster's template
+                win_logs = parsed[
+                    (parsed["timestamp"] >=
+                     alert_row["window_start"]) &
+                    (parsed["timestamp"] <
+                     alert_row["window_end"])
+                ]
+
+                # Filter to lines matching top_template exactly
+                template_logs = win_logs[
+                    win_logs["template"] ==
+                    alert_row["top_template"]
+                ]
+
+                # If exact match found use it
+                # otherwise fall back to FATAL/SEVERE lines
+                if not template_logs.empty:
+                    rep_content = (
+                        template_logs["content"]
+                        .value_counts().index[0]
+                    )
+                    rep_level = template_logs["level"].iloc[0]
+                else:
+                    error_logs = win_logs[
+                        win_logs["level"].isin(
+                            ["FATAL","SEVERE","ERROR"]
+                        )
+                    ]
+                    if not error_logs.empty:
+                        rep_content = (
+                            error_logs["content"]
+                            .value_counts().index[0]
+                        )
+                        rep_level = error_logs["level"].iloc[0]
+                    else:
+                        rep_content = alert_row["top_template"]
+                        rep_level   = "UNKNOWN"
+
+                rows.append({
+                    "Time (UTC)":    unix_to_readable(
+                                         alert_row["window_start"]
+                                     ),
+                    "Severity":      alert_row["severity"],
+                    "Score":         round(
+                                         alert_row["anomaly_score"],
+                                         3
+                                     ),
+                    "Anomaly Lines": int(
+                                         alert_row["anomaly_count"]
+                                     ),
+                    "Total Logs":    int(alert_row["total_logs"]),
+                    "Level":         rep_level,
+                    "Error Content": rep_content[:100] + "..."
+                                     if len(rep_content) > 100
+                                     else rep_content,
+                })
+
             st.dataframe(
-                display_group.sort_values(
-                    "anomaly_score", ascending=False
-                ),
-                use_container_width=True
+                pd.DataFrame(rows),
+                use_container_width=True,
+                hide_index=True
             )
+
+
+    # At the bottom of Tab 5 in app.py, after the existing cluster display:
+
+    st.divider()
+    st.subheader("🔬 Clustering Method Comparison")
+
+    minilm_path = Path("output/alerts_minilm.parquet")
+    if not minilm_path.exists():
+        st.info("Run `python alerts_minilm.py` to see comparison")
+    else:
+        @st.cache_data
+        def load_minilm():
+            return pd.read_parquet(
+                "output/alerts_minilm.parquet",
+                engine="pyarrow"
+            )
+
+        minilm_df = load_minilm()
+
+        # ── Summary metrics ───────────────────────────────────────────
+        tfidf_clusters = alerts[
+            alerts["cluster_id"] >= 0
+        ]["cluster_id"].nunique()
+        tfidf_unique   = int((alerts["cluster_id"] == -1).sum())
+        tfidf_groups   = tfidf_clusters + tfidf_unique
+
+        minilm_clusters = minilm_df[
+            minilm_df["cluster_id_minilm"] >= 0
+        ]["cluster_id_minilm"].nunique()
+        minilm_unique   = int(
+            (minilm_df["cluster_id_minilm"] == -1).sum()
+        )
+        minilm_groups   = minilm_clusters + minilm_unique
+
+        # Comparison table
+        # comparison = pd.DataFrame({
+        #     "Method":          ["TF-IDF + DBSCAN",
+        #                         "MiniLM + DBSCAN"],
+        #     "Clusters Found":  [tfidf_clusters, minilm_clusters],
+        #     "Unique Alerts":   [tfidf_unique,   minilm_unique],
+        #     "Distinct Groups": [tfidf_groups,   minilm_groups],
+        #     "Noise Reduction": [
+        #         f"{(1-tfidf_groups/len(alerts)):.1%}",
+        #         f"{(1-minilm_groups/len(minilm_df)):.1%}"
+        #     ],
+        #     "Silhouette":      ["0.9096", "0.6414"],
+        # })
+
+        # Compute silhouette scores dynamically
+        from sklearn.metrics import silhouette_score
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.preprocessing import normalize
+        import numpy as np
+
+        templates = minilm_df["top_template"].fillna("unknown").tolist()
+
+        # TF-IDF silhouette
+        try:
+            vectorizer  = TfidfVectorizer(
+                analyzer="word",
+                token_pattern=r"[a-zA-Z]+",
+                max_features=500
+            )
+            X_tfidf     = normalize(
+                vectorizer.fit_transform(templates).toarray()
+            )
+            tfidf_lbls  = minilm_df["cluster_id_tfidf"].tolist()
+            tfidf_sil   = round(float(silhouette_score(
+                X_tfidf, tfidf_lbls, metric="cosine"
+            )), 4) if len(set(tfidf_lbls)) > 1 else 0.0
+        except Exception:
+            tfidf_sil = 0.0
+
+        # MiniLM silhouette
+        try:
+            from sentence_transformers import SentenceTransformer
+            encoder     = SentenceTransformer(
+                "sentence-transformers/all-MiniLM-L6-v2"
+            )
+            embeddings  = encoder.encode(
+                templates,
+                batch_size=64,
+                show_progress_bar=False,
+                normalize_embeddings=True
+            )
+            minilm_lbls = minilm_df["cluster_id_minilm"].tolist()
+            minilm_sil  = round(float(silhouette_score(
+                embeddings, minilm_lbls, metric="cosine"
+            )), 4) if len(set(minilm_lbls)) > 1 else 0.0
+        except Exception:
+            minilm_sil  = 0.0
+
+        comparison = pd.DataFrame({
+            "Method":          ["TF-IDF + DBSCAN",
+                                "MiniLM + DBSCAN"],
+            "Clusters Found":  [tfidf_clusters, minilm_clusters],
+            "Unique Alerts":   [tfidf_unique,   minilm_unique],
+            "Distinct Groups": [tfidf_groups,   minilm_groups],
+            "Noise Reduction": [
+                f"{(1-tfidf_groups/len(alerts)):.1%}",
+                f"{(1-minilm_groups/len(minilm_df)):.1%}"
+            ],
+            "Silhouette":      [tfidf_sil, minilm_sil],
+            "Winner":          [
+                "✓" if tfidf_sil >= minilm_sil else "",
+                "✓" if minilm_sil > tfidf_sil  else ""
+            ]
+        })
+
+        st.dataframe(
+            comparison,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        better_method = "TF-IDF" if tfidf_sil >= minilm_sil \
+                        else "MiniLM"
+        better_noise  = max(
+            1 - tfidf_groups/len(alerts),
+            1 - minilm_groups/len(minilm_df)
+        )
+        st.info(
+            f"**Finding:** MiniLM achieves better noise reduction "
+            f"({1-minilm_groups/len(minilm_df):.1%} vs "
+            f"{1-tfidf_groups/len(alerts):.1%}) by grouping "
+            f"semantically similar alerts. {better_method} scores "
+            f"higher on silhouette score ({max(tfidf_sil, minilm_sil):.4f})."
+        )
+
+        st.divider()
+
+        # ── Method selector ───────────────────────────────────────────
+        method = st.radio(
+            "View clusters for:",
+            ["TF-IDF + DBSCAN", "MiniLM + DBSCAN"],
+            horizontal=True
+        )
+
+        if method == "TF-IDF + DBSCAN":
+            view_df = minilm_df.copy()
+            cid_col = "cluster_id_tfidf"
+        else:
+            view_df = minilm_df.copy()
+            cid_col = "cluster_id_minilm"
+
+        # Build label for whichever column we're using
+        lbl_map = {}
+        for cid in view_df[cid_col].unique():
+            grp = view_df[view_df[cid_col] == cid]
+            lbl_map[cid] = (
+                grp["top_template"]
+                .value_counts().index[0]
+            )
+        view_df["cluster_label_view"] = (
+            view_df[cid_col].map(lbl_map)
+        )
+        lbl_col = "cluster_label_view"
+
+        # ── Expandable cluster detail ──────────────────────────────
+        st.subheader(f"Clusters — {method}")
+
+        for cid in sorted(view_df[cid_col].unique()):
+            group      = view_df[view_df[cid_col] == cid]
+            label      = group[lbl_col].iloc[0]
+            worst      = group["anomaly_score"].max()
+            sev_counts = group["severity"].value_counts().to_dict()
+
+            icon = ("🔴" if "CRITICAL" in sev_counts
+                    else "🟠" if "HIGH" in sev_counts
+                    else "🟡" if "MEDIUM" in sev_counts
+                    else "🟢")
+
+            import re as _re
+
+            # Use dominant template across cluster alerts
+            # not the top window's log lines
+            dominant_template = (
+                group["top_template"]
+                .value_counts().index[0]
+            )
+
+            # Find actual log line matching dominant template
+            rep_content = None
+            for _, alert_row in group.head(5).iterrows():
+                win_logs = parsed[
+                    (parsed["timestamp"] >=
+                     alert_row["window_start"]) &
+                    (parsed["timestamp"] <
+                     alert_row["window_end"]) &
+                    (parsed["template"] == dominant_template)
+                ]
+                if not win_logs.empty:
+                    rep_content = (
+                        win_logs["content"]
+                        .value_counts().index[0]
+                    )
+                    break
+
+            if rep_content is None:
+                rep_content = dominant_template
+
+            clean_lbl = _re.sub(r'0x[0-9a-fA-F]+', '',
+                                 rep_content)
+            clean_lbl = _re.sub(r'\s+', ' ',
+                                 clean_lbl).strip()[:65]
+
+            crit = sev_counts.get("CRITICAL", 0)
+            high = sev_counts.get("HIGH", 0)
+            if crit > 0:
+                sev_label = f"{crit} CRITICAL"
+            elif high > 0:
+                sev_label = f"{high} HIGH"
+            else:
+                dom       = max(sev_counts, key=sev_counts.get)
+                sev_label = f"{sev_counts[dom]} {dom}"
+
+            title = (
+                f"{icon}  "
+                f"{'Cluster '+str(cid) if cid >= 0 else 'Unique'}  |  "
+                f"{len(group)} alerts  |  "
+                f"{sev_label}  |  "
+                f"Score: {worst:.3f}  |  "
+                f"{clean_lbl}"
+            )
+
+            with st.expander(title):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Alerts in cluster", len(group))
+                c2.metric("Max anomaly score", f"{worst:.3f}")
+                c3.metric("Critical alerts",
+                          sev_counts.get("CRITICAL", 0))
+
+                rows = []
+                for _, alert_row in group.sort_values(
+                    "anomaly_score", ascending=False
+                ).iterrows():
+                    win_logs = parsed[
+                        (parsed["timestamp"] >=
+                         alert_row["window_start"]) &
+                        (parsed["timestamp"] <
+                         alert_row["window_end"])
+                    ]
+
+                    template_logs = win_logs[
+                        win_logs["template"] ==
+                        alert_row["top_template"]
+                    ]
+
+                    if not template_logs.empty:
+                        rep_content = (
+                            template_logs["content"]
+                            .value_counts().index[0]
+                        )
+                        rep_level = template_logs["level"].iloc[0]
+                    else:
+                        error_logs = win_logs[
+                            win_logs["level"].isin(
+                                ["FATAL","SEVERE","ERROR"]
+                            )
+                        ]
+                        if not error_logs.empty:
+                            rep_content = (
+                                error_logs["content"]
+                                .value_counts().index[0]
+                            )
+                            rep_level = error_logs["level"].iloc[0]
+                        else:
+                            rep_content = alert_row["top_template"]
+                            rep_level   = "UNKNOWN"
+
+                    rows.append({
+                        "Time (UTC)":    unix_to_readable(
+                                             alert_row["window_start"]
+                                         ),
+                        "Severity":      alert_row["severity"],
+                        "Score":         round(
+                                             alert_row["anomaly_score"],
+                                             3
+                                         ),
+                        "Anomaly Lines": int(
+                                             alert_row["anomaly_count"]
+                                         ),
+                        "Total Logs":    int(alert_row["total_logs"]),
+                        "Level":         rep_level,
+                        "Error Content": rep_content[:100] + "..."
+                                         if len(rep_content) > 100
+                                         else rep_content,
+                    })
+
+                st.dataframe(
+                    pd.DataFrame(rows),
+                    use_container_width=True,
+                    hide_index=True
+                )
