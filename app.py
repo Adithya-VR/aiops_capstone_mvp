@@ -6,6 +6,7 @@ import duckdb
 from pathlib import Path
 
 from datetime import datetime
+from summarizer.summarizer import summarize_window, classify_window
 
 def unix_to_readable(ts):
     """Convert Unix timestamp to readable string."""
@@ -392,6 +393,34 @@ with t4:
                 )
             else:
                 st.caption("No log lines found for this window.")
+
+            # ── AI Root Cause Analysis ─────────────────────────────
+            st.divider()
+            col_btn, col_result = st.columns([1, 3])
+
+            with col_btn:
+                analyze_btn = st.button(
+                    "🤖 Analyze Root Cause",
+                    key=f"analyze_{int(row['window_start'])}",
+                    help="Uses flan-t5-base to generate root cause summary"
+                )
+
+            if analyze_btn:
+                with st.spinner(
+                    "Analyzing with flan-t5-base... (3-8 seconds)"
+                ):
+                    summary = summarize_window(window_logs)
+
+                    # Also classify the anomaly type
+                    classification = classify_window(window_logs)
+
+                with col_result:
+                    st.success(f"**Root Cause:** {summary}")
+                    st.caption(
+                        f"Anomaly type: **{classification['category']}** "
+                        f"(confidence: {classification['confidence']:.1%})"
+                    )
+
 # ══════════════════════════════════════════════════════════════════
 # TAB 5 — ALERT CLUSTERS
 # ══════════════════════════════════════════════════════════════════
