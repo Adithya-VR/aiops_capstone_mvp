@@ -31,7 +31,24 @@ if PARSED.exists():
     print("  parsed.parquet already exists — skipping.")
     print("  Delete output/parsed.parquet to re-run.\n")
 else:
-    BGL_RE = re.compile(
+    # BGL_RE = re.compile(
+    #     r'^(?P<label>\S+)\s+'
+    #     r'(?P<timestamp>\d+)\s+'
+    #     r'(?P<date>\S+)\s+'
+    #     r'(?P<node>\S+)\s+'
+    #     r'(?P<time>\S+)\s+'
+    #     r'(?P<node2>\S+)\s+'
+    #     r'(?P<type>\S+)\s+'
+    #     r'(?P<component>\S+)\s+'
+    #     r'(?P<level>\S+)\s+'
+    #     r'(?P<content>.+)$'
+    # )
+
+    # Replace the single BGL_RE with two patterns:
+
+# Format 1: Full format with node (most lines)
+# LABEL TIMESTAMP DATE NODE TIME NODE2 TYPE COMPONENT LEVEL CONTENT
+    BGL_RE_FULL = re.compile(
         r'^(?P<label>\S+)\s+'
         r'(?P<timestamp>\d+)\s+'
         r'(?P<date>\S+)\s+'
@@ -40,7 +57,21 @@ else:
         r'(?P<node2>\S+)\s+'
         r'(?P<type>\S+)\s+'
         r'(?P<component>\S+)\s+'
-        r'(?P<level>\S+)\s+'
+        r'(?P<level>INFO|WARN|WARNING|ERROR|FATAL|SEVERE|FAILURE|CRITICAL)\s+'
+        r'(?P<content>.+)$'
+    )
+
+# Format 2: Short format where node = "-" (no node2 field)
+# LABEL TIMESTAMP DATE - TIME TYPE COMPONENT LEVEL CONTENT
+    BGL_RE_SHORT = re.compile(
+        r'^(?P<label>\S+)\s+'
+        r'(?P<timestamp>\d+)\s+'
+        r'(?P<date>\S+)\s+'
+        r'-\s+'                      # node is literally "-"
+        r'(?P<time>\S+)\s+'
+        r'(?P<type>\S+)\s+'
+        r'(?P<component>\S+)\s+'
+        r'(?P<level>INFO|WARN|WARNING|ERROR|FATAL|SEVERE|FAILURE|CRITICAL)\s+'
         r'(?P<content>.+)$'
     )
 
@@ -53,37 +84,52 @@ else:
             line = line.strip()
             if not line:
                 continue
-            m = BGL_RE.match(line)
+
+            # Try full format first, then short format
+            m = BGL_RE_FULL.match(line)
+            fmt = "full"
+            if not m:
+                m = BGL_RE_SHORT.match(line)
+                fmt = "short"
+
             if not m:
                 skipped += 1
                 continue
+
             d = m.groupdict()
+
+            # For short format, node2 doesn't exist — use "-"
+            node = d.get("node", "-")
+            if node == "-" or fmt == "short":
+                node = "SYSTEM"   # cleaner label for dashboard
+
             r = miner.add_log_message(d["content"])
             records.append({
                 "line_id":    i,
                 "is_anomaly": int(d["label"] != "-"),
                 "timestamp":  int(d["timestamp"]),
                 "date":       d["date"],
-                "node":       d["node"],
+                "node":       node,
                 "level":      d["level"],
                 "component":  d["component"],
                 "content":    d["content"],
                 "event_id":   r["cluster_id"],
                 "template":   r["template_mined"],
             })
+
             if i % 50000 == 0 and i > 0:
                 print(f"  Processed {i:,} lines...")
-
     parsed = pd.DataFrame(records)
+    # parsed.to_parquet(PARSED, engine="pyarrow", index=False)
 
  # ── Normalize log levels ───────────────────────────────────────
     # BGL valid levels — anything else is a parsing artifact
-    VALID_LEVELS = {"INFO", "WARN", "WARNING", "ERROR",
-                    "FATAL", "SEVERE", "FAILURE", "CRITICAL"}
+    # VALID_LEVELS = {"INFO", "WARN", "WARNING", "ERROR",
+    #                 "FATAL", "SEVERE", "FAILURE", "CRITICAL"}
 
-    parsed["level"] = parsed["level"].apply(
-        lambda x: x if x in VALID_LEVELS else "OTHER"
-    )
+    # parsed["level"] = parsed["level"].apply(
+    #     lambda x: x if x in VALID_LEVELS else "OTHER"
+    # )
 
     parsed.to_parquet(PARSED, engine="pyarrow", index=False)
     print(f"\n  Total parsed    : {len(parsed):,}")
