@@ -7,7 +7,6 @@ from pathlib import Path
 
 from datetime import datetime
 
-
 def unix_to_readable(ts):
     """Convert Unix timestamp to readable string."""
     try:
@@ -24,28 +23,6 @@ st.set_page_config(
 )
 
 # ── Load data via DuckDB ───────────────────────────────────────────
-# @st.cache_data
-# def load_data():
-#     try:
-#         con = duckdb.connect()
-#         con.execute(
-#             "CREATE VIEW logs AS "
-#             "SELECT * FROM 'output/parsed.parquet'"
-#         )
-#         con.execute(
-#             "CREATE VIEW wins AS "
-#             "SELECT * FROM 'output/scores.parquet'"
-#         )
-#         parsed = con.execute("SELECT * FROM logs").df()
-#         scores = con.execute("SELECT * FROM wins").df()
-#         return parsed, scores
-#     except Exception as e:
-#         st.error(f"Could not load data: {e}")
-#         st.info("Make sure you ran pipeline.py first.")
-#         st.stop()
-
-# parsed, scores = load_data()
-
 @st.cache_data
 def load_data():
     try:
@@ -58,42 +35,13 @@ def load_data():
             "CREATE VIEW wins AS "
             "SELECT * FROM 'output/scores.parquet'"
         )
-        # Only load needed columns — reduces memory significantly
-        parsed = con.execute("""
-            SELECT line_id, timestamp, date, node,
-                   level, is_anomaly, event_id,
-                   template, content
-            FROM logs
-        """).df()
+        parsed = con.execute("SELECT * FROM logs").df()
         scores = con.execute("SELECT * FROM wins").df()
         return parsed, scores
     except Exception as e:
         st.error(f"Could not load data: {e}")
         st.info("Make sure you ran pipeline.py first.")
         st.stop()
-
-
-@st.cache_data
-def load_window_logs(window_start, window_end):
-    """Load only the log lines for one specific window."""
-    try:
-        con = duckdb.connect()
-        con.execute(
-            "CREATE VIEW logs AS "
-            "SELECT * FROM 'output/parsed.parquet'"
-        )
-        df = con.execute(f"""
-            SELECT node, level, is_anomaly,
-                   template, content, timestamp
-            FROM logs
-            WHERE timestamp >= {int(window_start)}
-              AND timestamp <  {int(window_end)}
-        """).df()
-        con.close()
-        return df
-    except Exception:
-        return pd.DataFrame()
-
 
 parsed, scores = load_data()
 
@@ -411,7 +359,7 @@ with t4:
         elif score >= p70:
             sev = "🟡 MEDIUM"
         else:
-            sev = "🟢 LOW"
+            sev = "🟢 LOW"    
 
         label = (
             f"{sev}  |  "
@@ -426,12 +374,10 @@ with t4:
             c2.metric("Total Logs",      f"{int(row['total_logs'])}")
             c3.metric("Anomalous Lines", f"{int(row['anomaly_count'])}")
 
-            # Fix 2 — use load_window_logs instead of
-            # filtering the full 4.7M row DataFrame
-            window_logs = load_window_logs(
-                row["window_start"],
-                row["window_end"]
-            )
+            window_logs = parsed[
+                (parsed["timestamp"] >= row["window_start"]) &
+                (parsed["timestamp"] <  row["window_end"])
+            ]
 
             if not window_logs.empty:
                 st.caption(
@@ -446,52 +392,6 @@ with t4:
                 )
             else:
                 st.caption("No log lines found for this window.")
-
-            # # ── AI Root Cause Analysis ─────────────────────────────
-            # st.divider()
-            # col_btn, col_result = st.columns([1, 3])
-
-            # # Fix 3 — session_state key per window
-            # # stores result so page rerun doesn't
-            # # re-trigger expensive model inference
-            # win_key = f"summary_{int(row['window_start'])}"
-
-            # with col_btn:
-            #     analyze_btn = st.button(
-            #         "🤖 Analyze Root Cause",
-            #         key=f"analyze_{int(row['window_start'])}",
-            #         help="Uses flan-t5 to generate root cause summary"
-            #     )
-
-            # if analyze_btn:
-            #     with st.spinner(
-            #         "Analyzing... (first run downloads model ~250MB)"
-            #     ):
-            #         summary = summarize_window(window_logs)
-            #         classification = classify_window(window_logs)
-
-            #     # Store in session state so result
-            #     # persists across Streamlit reruns
-            #     st.session_state[win_key] = {
-            #         "summary":    summary,
-            #         "category":   classification["category"],
-            #         "confidence": classification["confidence"]
-            #     }
-
-            # # Display stored result if available
-            # if win_key in st.session_state:
-            #     result = st.session_state[win_key]
-            #     with col_result:
-            #         st.success(
-            #             f"**Root Cause:** {result['summary']}"
-            #         )
-            #         st.caption(
-            #             f"Anomaly type: **{result['category']}**  |  "
-            #             f"Confidence: {result['confidence']:.1%}"
-            #         )
-
-
-
 # ══════════════════════════════════════════════════════════════════
 # TAB 5 — ALERT CLUSTERS
 # ══════════════════════════════════════════════════════════════════
