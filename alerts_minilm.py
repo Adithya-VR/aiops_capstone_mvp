@@ -177,3 +177,20 @@ print(f"\nComparison results saved → {OUT}")
 print("\nDecision: if MiniLM silhouette > TF-IDF silhouette,")
 print("replace alerts.py clustering with MiniLM.")
 print("Otherwise keep TF-IDF.")
+
+# Save silhouette scores to file for dashboard
+import json
+from pathlib import Path
+
+scores_out = {
+    "tfidf_silhouette":  round(float(tfidf_sil), 4),
+    "minilm_silhouette": round(float(minilm_sil), 4),
+    "tfidf_clusters":    n_tfidf_clusters,
+    "tfidf_unique":      n_tfidf_noise,
+    "minilm_clusters":   n_minilm_clusters,
+    "minilm_unique":     n_minilm_noise,
+}
+Path("output/clustering_comparison.json").write_text(
+    json.dumps(scores_out, indent=2)
+)
+print(f"\nScores saved → output/clustering_comparison.json")

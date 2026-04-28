@@ -713,49 +713,69 @@ with t5:
         #     "Silhouette":      ["0.9096", "0.6414"],
         # })
 
+        # replacing the below compute silhoutte score code block to load the scores from file in alerts_minilm.py. The replacement code block starts from line 761.
         # Compute silhouette scores dynamically
-        from sklearn.metrics import silhouette_score
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.preprocessing import normalize
-        import numpy as np
+        # from sklearn.metrics import silhouette_score
+        # from sklearn.feature_extraction.text import TfidfVectorizer
+        # from sklearn.preprocessing import normalize
+        # import numpy as np
 
-        templates = minilm_df["top_template"].fillna("unknown").tolist()
+        # templates = minilm_df["top_template"].fillna("unknown").tolist()
 
-        # TF-IDF silhouette
-        try:
-            vectorizer  = TfidfVectorizer(
-                analyzer="word",
-                token_pattern=r"[a-zA-Z]+",
-                max_features=500
-            )
-            X_tfidf     = normalize(
-                vectorizer.fit_transform(templates).toarray()
-            )
-            tfidf_lbls  = minilm_df["cluster_id_tfidf"].tolist()
-            tfidf_sil   = round(float(silhouette_score(
-                X_tfidf, tfidf_lbls, metric="cosine"
-            )), 4) if len(set(tfidf_lbls)) > 1 else 0.0
-        except Exception:
-            tfidf_sil = 0.0
+        # # TF-IDF silhouette
+        # try:
+        #     vectorizer  = TfidfVectorizer(
+        #         analyzer="word",
+        #         token_pattern=r"[a-zA-Z]+",
+        #         max_features=500
+        #     )
+        #     X_tfidf     = normalize(
+        #         vectorizer.fit_transform(templates).toarray()
+        #     )
+        #     tfidf_lbls  = minilm_df["cluster_id_tfidf"].tolist()
+        #     tfidf_sil   = round(float(silhouette_score(
+        #         X_tfidf, tfidf_lbls, metric="cosine"
+        #     )), 4) if len(set(tfidf_lbls)) > 1 else 0.0
+        # except Exception:
+        #     tfidf_sil = 0.0
 
-        # MiniLM silhouette
-        try:
-            from sentence_transformers import SentenceTransformer
-            encoder     = SentenceTransformer(
-                "sentence-transformers/all-MiniLM-L6-v2"
+        # # MiniLM silhouette
+        # try:
+        #     from sentence_transformers import SentenceTransformer
+        #     encoder     = SentenceTransformer(
+        #         "sentence-transformers/all-MiniLM-L6-v2"
+        #     )
+        #     embeddings  = encoder.encode(
+        #         templates,
+        #         batch_size=64,
+        #         show_progress_bar=False,
+        #         normalize_embeddings=True
+        #     )
+        #     minilm_lbls = minilm_df["cluster_id_minilm"].tolist()
+        #     minilm_sil  = round(float(silhouette_score(
+        #         embeddings, minilm_lbls, metric="cosine"
+        #     )), 4) if len(set(minilm_lbls)) > 1 else 0.0
+        # except Exception:
+        #     minilm_sil  = 0.0
+        
+        # Load silhouette scores from file
+        # Computed by alerts_minilm.py — never runs model here
+        comparison_path = Path("output/clustering_comparison.json")
+        if comparison_path.exists():
+            import json
+            comp_scores = json.loads(
+                comparison_path.read_text()
             )
-            embeddings  = encoder.encode(
-                templates,
-                batch_size=64,
-                show_progress_bar=False,
-                normalize_embeddings=True
+            tfidf_sil  = comp_scores.get("tfidf_silhouette",  0.0)
+            minilm_sil = comp_scores.get("minilm_silhouette", 0.0)
+        else:
+            tfidf_sil  = 0.0
+            minilm_sil = 0.0
+            st.caption(
+                "Run `python alerts_minilm.py` to compute "
+                "silhouette scores"
             )
-            minilm_lbls = minilm_df["cluster_id_minilm"].tolist()
-            minilm_sil  = round(float(silhouette_score(
-                embeddings, minilm_lbls, metric="cosine"
-            )), 4) if len(set(minilm_lbls)) > 1 else 0.0
-        except Exception:
-            minilm_sil  = 0.0
+
 
         comparison = pd.DataFrame({
             "Method":          ["TF-IDF + DBSCAN",
