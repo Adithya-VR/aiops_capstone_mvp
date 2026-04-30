@@ -6,6 +6,11 @@ scikit-learn==1.4.0
 streamlit==1.31.0
 plotly==5.18.0
 numpy==1.26.4
+fastapi==0.136.1
+uvicorn==0.46.0
+requests==2.31.0
+sentence-transformers==5.3.0
+torch==2.10.0
 
 # drain3==0.9.11
 # pandas==2.2.0
