@@ -93,14 +93,26 @@ print(f"  Reduction : {len(alert_df):,} → "
       f"({(1-(n_tfidf_clusters+n_tfidf_noise)/len(alert_df)):.1%})")
 
 # Silhouette score for TF-IDF
-if len(set(tfidf_labels)) > 1:
+# if len(set(tfidf_labels)) > 1:
+#     tfidf_sil = silhouette_score(
+#         X_tfidf, tfidf_labels, metric="cosine"
+#     )
+#     print(f"  Silhouette: {tfidf_sil:.4f}")
+# else:
+#     tfidf_sil = 0
+#     print(f"  Silhouette: N/A (only 1 cluster)")
+
+# Silhouette score for TF-IDF — exclude noise points (label = -1)
+tfidf_mask = tfidf_labels != -1
+if tfidf_mask.sum() > 1 and len(set(tfidf_labels[tfidf_mask])) > 1:
     tfidf_sil = silhouette_score(
-        X_tfidf, tfidf_labels, metric="cosine"
+        X_tfidf[tfidf_mask], tfidf_labels[tfidf_mask],
+        metric="cosine"
     )
-    print(f"  Silhouette: {tfidf_sil:.4f}")
+    print(f"  Silhouette: {tfidf_sil:.4f} (noise points excluded)")
 else:
-    tfidf_sil = 0
-    print(f"  Silhouette: N/A (only 1 cluster)")
+    tfidf_sil = 0.0
+    print(f"  Silhouette: N/A")
 
 # ══════════════════════════════════════════════════════════════════
 # METHOD 2: MiniLM + DBSCAN (new approach)
@@ -137,14 +149,26 @@ print(f"  Reduction : {len(alert_df):,} → "
       f"({(1-(n_minilm_clusters+n_minilm_noise)/len(alert_df)):.1%})")
 
 # Silhouette score for MiniLM
-if len(set(minilm_labels)) > 1:
+# if len(set(minilm_labels)) > 1:
+#     minilm_sil = silhouette_score(
+#         embeddings, minilm_labels, metric="cosine"
+#     )
+#     print(f"  Silhouette: {minilm_sil:.4f}")
+# else:
+#     minilm_sil = 0
+#     print(f"  Silhouette: N/A (only 1 cluster)")
+
+# Silhouette score for MiniLM — exclude noise points (label = -1)
+minilm_mask = minilm_labels != -1
+if minilm_mask.sum() > 1 and len(set(minilm_labels[minilm_mask])) > 1:
     minilm_sil = silhouette_score(
-        embeddings, minilm_labels, metric="cosine"
+        embeddings[minilm_mask], minilm_labels[minilm_mask],
+        metric="cosine"
     )
-    print(f"  Silhouette: {minilm_sil:.4f}")
+    print(f"  Silhouette: {minilm_sil:.4f} (noise points excluded)")
 else:
-    minilm_sil = 0
-    print(f"  Silhouette: N/A (only 1 cluster)")
+    minilm_sil = 0.0
+    print(f"  Silhouette: N/A")
 
 # ══════════════════════════════════════════════════════════════════
 # COMPARISON

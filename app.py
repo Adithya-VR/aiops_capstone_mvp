@@ -345,9 +345,15 @@ with t3:
 with t4:
     st.header("Top Anomalous Windows")
 
-    p95 = float(scores["anomaly_score"].quantile(0.95))
-    p85 = float(scores["anomaly_score"].quantile(0.85))
-    p70 = float(scores["anomaly_score"].quantile(0.70))
+    # p95 = float(scores["anomaly_score"].quantile(0.95))
+    # p85 = float(scores["anomaly_score"].quantile(0.85))
+    # p70 = float(scores["anomaly_score"].quantile(0.70))
+    anomalous_scores = scores[
+        scores["predicted"] == 1
+    ]["anomaly_score"]
+    p95 = float(anomalous_scores.quantile(0.95))
+    p85 = float(anomalous_scores.quantile(0.85))
+    p70 = float(anomalous_scores.quantile(0.70))
     top = scores.nlargest(top_n, "anomaly_score")
 
     for _, row in top.iterrows():

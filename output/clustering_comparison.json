@@ -1,6 +1,6 @@
 {
-  "tfidf_silhouette": 0.7626,
-  "minilm_silhouette": 0.5673,
+  "tfidf_silhouette": 0.7926,
+  "minilm_silhouette": 0.581,
   "tfidf_clusters": 36,
   "tfidf_unique": 16,
   "minilm_clusters": 25,
