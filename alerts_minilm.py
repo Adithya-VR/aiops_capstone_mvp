@@ -67,7 +67,7 @@ templates = alert_df["top_template"].fillna("unknown").tolist()
 # ══════════════════════════════════════════════════════════════════
 # METHOD 1: TF-IDF + DBSCAN (existing approach)
 # ══════════════════════════════════════════════════════════════════
-print("\n── Method 1: TF-IDF + DBSCAN ────────────────────")
+print("\n-- Method 1: TF-IDF + DBSCAN --")
 
 vectorizer = TfidfVectorizer(
     analyzer="word",
@@ -88,7 +88,7 @@ n_tfidf_noise    = int((tfidf_labels == -1).sum())
 print(f"  Clusters  : {n_tfidf_clusters}")
 print(f"  Unique    : {n_tfidf_noise}")
 print(f"  Groups    : {n_tfidf_clusters + n_tfidf_noise}")
-print(f"  Reduction : {len(alert_df):,} → "
+print(f"  Reduction : {len(alert_df):,} -> "
       f"{n_tfidf_clusters + n_tfidf_noise} groups "
       f"({(1-(n_tfidf_clusters+n_tfidf_noise)/len(alert_df)):.1%})")
 
@@ -117,7 +117,7 @@ else:
 # ══════════════════════════════════════════════════════════════════
 # METHOD 2: MiniLM + DBSCAN (new approach)
 # ══════════════════════════════════════════════════════════════════
-print("\n── Method 2: MiniLM + DBSCAN ────────────────────")
+print("\n-- Method 2: MiniLM + DBSCAN --")
 print("  Loading sentence-transformers/all-MiniLM-L6-v2...")
 print("  (Downloads ~80MB on first run, cached after)")
 
@@ -144,7 +144,7 @@ n_minilm_noise    = int((minilm_labels == -1).sum())
 print(f"\n  Clusters  : {n_minilm_clusters}")
 print(f"  Unique    : {n_minilm_noise}")
 print(f"  Groups    : {n_minilm_clusters + n_minilm_noise}")
-print(f"  Reduction : {len(alert_df):,} → "
+print(f"  Reduction : {len(alert_df):,} -> "
       f"{n_minilm_clusters + n_minilm_noise} groups "
       f"({(1-(n_minilm_clusters+n_minilm_noise)/len(alert_df)):.1%})")
 
@@ -173,7 +173,7 @@ else:
 # ══════════════════════════════════════════════════════════════════
 # COMPARISON
 # ══════════════════════════════════════════════════════════════════
-print("\n── Comparison Summary ───────────────────────────")
+print("\n-- Comparison Summary --")
 print(f"{'Metric':<25} {'TF-IDF':>10} {'MiniLM':>10} {'Winner':>10}")
 print("-" * 55)
 
@@ -197,7 +197,7 @@ print(f"{'Silhouette score':<25} {tfidf_sil:>10.4f} "
 alert_df["cluster_id_tfidf"]   = tfidf_labels
 alert_df["cluster_id_minilm"]  = minilm_labels
 alert_df.to_parquet(OUT, engine="pyarrow", index=False)
-print(f"\nComparison results saved → {OUT}")
+print(f"\nComparison results saved -> {OUT}")
 print("\nDecision: if MiniLM silhouette > TF-IDF silhouette,")
 print("replace alerts.py clustering with MiniLM.")
 print("Otherwise keep TF-IDF.")
@@ -217,4 +217,4 @@ scores_out = {
 Path("output/clustering_comparison.json").write_text(
     json.dumps(scores_out, indent=2)
 )
-print(f"\nScores saved → output/clustering_comparison.json")
+print(f"\nScores saved -> output/clustering_comparison.json")

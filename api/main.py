@@ -345,7 +345,8 @@ def get_clustering_comparison():
                 (1 - (
                     data.get("minilm_clusters", 0) +
                     data.get("minilm_unique", 0)
-                ) / 535) * 100, 1
+                ) / max(data.get("tfidf_clusters", 1) +
+                        data.get("tfidf_unique", 1), 1)) * 100, 1
             )
         }
     }

@@ -116,7 +116,7 @@ n_noise    = int((labels == -1).sum())
 print(f"  Total alerts  : {len(alert_df):,}")
 print(f"  Clusters found: {n_clusters}")
 print(f"  Unclustered   : {n_noise} (unique alert types)")
-print(f"  Reduction     : {len(alert_df):,} alerts → "
+print(f"  Reduction     : {len(alert_df):,} alerts -> "
       f"{n_clusters + n_noise} distinct groups")
 
 # ── Step 3: Add cluster labels ─────────────────────────────────────
@@ -138,10 +138,10 @@ alert_df["cluster_label"] = alert_df["cluster_id"].map(
 )
 
 alert_df.to_parquet(ALERTS, engine="pyarrow", index=False)
-print(f"\nAlerts saved → {ALERTS}")
+print(f"\nAlerts saved -> {ALERTS}")
 
 # ── Step 4: Print cluster summary ─────────────────────────────────
-print("\n── Top Alert Clusters ────────────────────────────")
+print("\n-- Top Alert Clusters --")
 summary = (alert_df
            .groupby(["cluster_id", "cluster_label"])
            .agg(
