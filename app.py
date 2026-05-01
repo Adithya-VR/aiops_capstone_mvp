@@ -439,7 +439,17 @@ with t5:
         alert_count = int(cluster["alert_count"])
         critical_count = int(cluster["critical_count"])
 
-        icon = "🔴" if critical_count > 0 else "🟠"
+        # icon = "🔴" if critical_count > 0 else "🟠"
+        cluster_alerts = alerts[alerts["cluster_id"] == cid]
+        sev_counts = cluster_alerts["severity"].value_counts().to_dict()
+        if sev_counts.get("CRITICAL", 0) > 0:
+            icon = "🔴"
+        elif sev_counts.get("HIGH", 0) > 0:
+            icon = "🟠"
+        elif sev_counts.get("MEDIUM", 0) > 0:
+            icon = "🟡"
+        else:
+            icon = "🟢"  #Low
         title = (
             f"{icon} {'Cluster ' + str(cid) if cid >= 0 else 'Unique'} | "
             f"{alert_count} alerts | Max score: {worst:.3f} | {label[:70]}"
