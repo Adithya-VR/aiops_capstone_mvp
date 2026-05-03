@@ -1,12 +1,19 @@
 import json
+import argparse
 from pathlib import Path
 
 import pandas as pd
+from dataset_config import DEFAULT_DATASET, dataset_paths
 
 
-SCORES = Path("output/scores.parquet")
-PARSED = Path("output/parsed.parquet")
-METRICS = Path("output/metrics.json")
+parser = argparse.ArgumentParser()
+parser.add_argument("--dataset", default=DEFAULT_DATASET)
+args = parser.parse_args()
+PATHS = dataset_paths(args.dataset)
+
+SCORES = PATHS["scores"]
+PARSED = PATHS["parsed"]
+METRICS = PATHS["metrics"]
 
 
 def require(path: Path) -> None:

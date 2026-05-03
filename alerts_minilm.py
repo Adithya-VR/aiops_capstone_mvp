@@ -4,15 +4,22 @@
 
 import pandas as pd
 import numpy as np
+import argparse
 from pathlib import Path
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import silhouette_score
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
+from dataset_config import DEFAULT_DATASET, dataset_paths
 
-SCORES  = Path("output/scores.parquet")
-PARSED  = Path("output/parsed.parquet")
-OUT     = Path("output/alerts_minilm.parquet")
+parser = argparse.ArgumentParser()
+parser.add_argument("--dataset", default=DEFAULT_DATASET)
+args = parser.parse_args()
+PATHS = dataset_paths(args.dataset)
+
+SCORES  = PATHS["scores"]
+PARSED  = PATHS["parsed"]
+OUT     = PATHS["alerts_minilm"]
 
 print("Loading data...")
 scores = pd.read_parquet(SCORES, engine="pyarrow")
@@ -214,7 +221,7 @@ scores_out = {
     "minilm_clusters":   n_minilm_clusters,
     "minilm_unique":     n_minilm_noise,
 }
-Path("output/clustering_comparison.json").write_text(
+PATHS["clustering_comparison"].write_text(
     json.dumps(scores_out, indent=2)
 )
-print(f"\nScores saved -> output/clustering_comparison.json")
+print(f"\nScores saved -> {PATHS['clustering_comparison']}")

@@ -1,17 +1,24 @@
 # synthetic_test.py
+import argparse
 import pandas as pd
 import numpy as np
 import pickle
 from pathlib import Path
+from dataset_config import DEFAULT_DATASET, dataset_paths
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--dataset", default=DEFAULT_DATASET)
+args = parser.parse_args()
+PATHS = dataset_paths(args.dataset)
 
 # Load model
-bundle   = pickle.load(open("output/model.pkl", "rb"))
+bundle   = pickle.load(open(PATHS["model"], "rb"))
 model    = bundle["model"]
 scaler   = bundle["scaler"]
 feat_cols = bundle["feat_cols"]
 
 # Load feature matrix
-feat = pd.read_parquet("output/features.parquet", engine="pyarrow")
+feat = pd.read_parquet(PATHS["features"], engine="pyarrow")
 
 # ── Test 1: A perfectly normal window should score LOW ─────────────
 # Take the median of all normal windows = as normal as it gets
