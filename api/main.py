@@ -3,7 +3,7 @@ from typing import Optional
 import json
 
 import duckdb
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from dataset_config import (
@@ -60,7 +60,7 @@ def paths_for(dataset: str) -> dict:
     try:
         paths = dataset_paths(dataset)
     except KeyError:
-        raise ValueError(f"Unknown dataset: {dataset}")
+        raise HTTPException(status_code=404, detail=f"Unknown dataset: {dataset}")
     return paths
 
 
@@ -70,7 +70,7 @@ def parquet(paths: dict, key: str) -> str:
 
 def require_file(paths: dict, key: str, message: str) -> Optional[dict]:
     if not paths[key].exists():
-        return {"error": message}
+        raise HTTPException(status_code=404, detail=message)
     return None
 
 
@@ -461,7 +461,7 @@ def get_alert_summary(dataset: str = DEFAULT_DATASET):
             SUM(CASE WHEN severity = 'LOW' THEN 1 ELSE 0 END) AS low,
             COUNT(DISTINCT CASE WHEN cluster_id >= 0 THEN cluster_id END)
                 AS clusters,
-            SUM(CASE WHEN cluster_id = -1 THEN 1 ELSE 0 END)
+            SUM(CASE WHEN cluster_id < 0 THEN 1 ELSE 0 END)
                 AS unique_alerts
         FROM '{alerts}'
     """)[0]
@@ -657,6 +657,7 @@ def get_clusters(dataset: str = DEFAULT_DATASET):
                 JOIN '{parsed}' p
                   ON p.timestamp >= a.window_start
                  AND p.timestamp <  a.window_end
+                 AND p.template = a.top_template
                  {label_clause}
                 GROUP BY a.cluster_id, p.content, p.level
             )

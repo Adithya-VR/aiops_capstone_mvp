@@ -5,12 +5,14 @@ import argparse
 from pathlib import Path
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import normalize
-from dataset_config import DEFAULT_DATASET, dataset_paths
+from dataset_config import DEFAULT_DATASET, dataset_paths, get_dataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset", default=DEFAULT_DATASET)
 args = parser.parse_args()
+CFG = get_dataset(args.dataset)
 PATHS = dataset_paths(args.dataset)
+HAS_LABELS = bool(CFG.get("has_labels", True))
 
 SCORES  = PATHS["scores"]
 PARSED  = PATHS["parsed"]
@@ -44,18 +46,22 @@ for _, row in anomalous.iterrows():
         (parsed["timestamp"] <  row["window_end"])
     ]
 
-    # Get the most common anomalous template in this window
-    anom_logs = window_logs[window_logs["is_anomaly"] == 1]
-    if anom_logs.empty:
-        anom_logs = window_logs
+    # Labeled datasets use the true anomalous lines as representatives.
+    # Unlabeled datasets use all logs in the predicted alert window.
+    if HAS_LABELS:
+        representative_logs = window_logs[window_logs["is_anomaly"] == 1]
+        if representative_logs.empty:
+            representative_logs = window_logs
+    else:
+        representative_logs = window_logs
 
-    top_template = (anom_logs["template"]
+    top_template = (representative_logs["template"]
                     .value_counts().index[0]
-                    if len(anom_logs) > 0 else "unknown")
+                    if len(representative_logs) > 0 else "unknown")
 
-    top_level = (anom_logs["level"]
+    top_level = (representative_logs["level"]
                  .value_counts().index[0]
-                 if len(anom_logs) > 0 else "INFO")
+                 if len(representative_logs) > 0 else "INFO")
 
     # Assign severity based on score percentile
     # if row["anomaly_score"] >= p95:
@@ -113,9 +119,13 @@ X = normalize(X)   # L2 normalize for cosine similarity
 # DBSCAN — no need to specify number of clusters
 # eps=0.4 means templates need 60%+ similarity to cluster together
 clusterer = DBSCAN(eps=0.5, min_samples=2, metric="cosine")
-labels    = clusterer.fit_predict(X)
+labels = clusterer.fit_predict(X)
+unique_labels = labels.copy()
+noise_positions = np.where(unique_labels == -1)[0]
+for noise_number, row_index in enumerate(noise_positions, start=1):
+    unique_labels[row_index] = -noise_number
 
-alert_df["cluster_id"] = labels
+alert_df["cluster_id"] = unique_labels
 
 n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
 n_noise    = int((labels == -1).sum())
@@ -129,19 +139,21 @@ print(f"  Reduction     : {len(alert_df):,} alerts -> "
 # ── Step 3: Add cluster labels ─────────────────────────────────────
 # For each cluster find the most representative template
 cluster_labels = {}
-for cid in set(labels):
-    if cid == -1:
+for cid in set(unique_labels):
+    if cid < 0:
         continue
     cluster_members = alert_df[alert_df["cluster_id"] == cid]
     # Most common template in this cluster = cluster name
     cluster_labels[cid] = (cluster_members["top_template"]
                            .value_counts().index[0][:60])
 
-alert_df["cluster_label"] = alert_df["cluster_id"].map(
-    lambda x: cluster_labels.get(x, "Unique: " +
-              str(alert_df.loc[alert_df["cluster_id"]==x,
-                  "top_template"].values[0])[:40]
-              if x == -1 else cluster_labels.get(x, "Unknown"))
+alert_df["cluster_label"] = alert_df.apply(
+    lambda row: (
+        f"Unique: {str(row['top_template'])[:40]}"
+        if row["cluster_id"] < 0
+        else cluster_labels.get(row["cluster_id"], "Unknown")
+    ),
+    axis=1,
 )
 
 alert_df.to_parquet(ALERTS, engine="pyarrow", index=False)

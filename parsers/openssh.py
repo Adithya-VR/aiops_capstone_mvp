@@ -7,6 +7,9 @@ DATASET_NAME = "openssh"
 WINDOW_SECS = 300
 STEP_SECS = 150
 HAS_LABELS = False
+BASE_YEAR = 2004
+_current_year = BASE_YEAR
+_previous_month = None
 
 SSH_RE = re.compile(
     r"^(?P<month>\w+)\s+(?P<day>\d+)\s+(?P<time>\d+:\d+:\d+)\s+"
@@ -38,21 +41,38 @@ MONTH_MAP = {
 
 
 def get_source_path() -> Path | None:
+    data_dir = Path("data/OpenSSH")
+    if not data_dir.exists():
+        return None
+
     for name in ["SSH.log", "OpenSSH_2k.log", "openssh.log"]:
-        path = Path("data/OpenSSH") / name
+        path = data_dir / name
         if path.exists():
             return path
 
-    files = list(Path("data/OpenSSH").glob("*.log"))
+    files = list(data_dir.glob("*.log"))
     return files[0] if files else None
 
 
+def reset_parser_state() -> None:
+    global _current_year, _previous_month
+    _current_year = BASE_YEAR
+    _previous_month = None
+
+
 def _parse_time(month: str, day: str, time_str: str) -> int:
+    global _current_year, _previous_month
+
     try:
+        month_num = MONTH_MAP.get(month, 1)
+        if _previous_month is not None and month_num < _previous_month:
+            _current_year += 1
+        _previous_month = month_num
+
         hour, minute, second = map(int, time_str.split(":"))
         dt = datetime(
-            2004,
-            MONTH_MAP.get(month, 1),
+            _current_year,
+            month_num,
             int(day),
             hour,
             minute,

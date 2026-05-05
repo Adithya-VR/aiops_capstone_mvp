@@ -2,13 +2,13 @@
   "dataset": "openssh",
   "evaluation_mode": "unlabeled",
   "ground_truth_available": false,
-  "total_windows": 8740,
-  "predicted_anomalous_windows": 263,
-  "predicted_normal_windows": 8477,
-  "score_min": 0.3177,
-  "score_max": 0.6974,
-  "score_mean": 0.3775,
-  "score_p85": 0.432,
-  "score_p90": 0.4545,
-  "score_p95": 0.5077
+  "total_windows": 8712,
+  "predicted_anomalous_windows": 262,
+  "predicted_normal_windows": 8450,
+  "score_min": 0.3181,
+  "score_max": 0.7102,
+  "score_mean": 0.3779,
+  "score_p85": 0.4311,
+  "score_p90": 0.4547,
+  "score_p95": 0.5036
 }

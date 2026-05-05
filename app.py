@@ -64,7 +64,7 @@ def load_required_data(dataset):
 
 
 st.set_page_config(
-    page_title="AIOps - BGL Anomaly Detection",
+    page_title="AIOps Anomaly Detection",
     page_icon="🔍",
     layout="wide",
 )

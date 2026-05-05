@@ -224,9 +224,16 @@ def parse_bgl() -> tuple[pd.DataFrame, int]:
 def parse_with_dataset_parser() -> tuple[pd.DataFrame, int]:
     parser_module = import_module(f"parsers.{CFG['parser']}")
     source_path = parser_module.get_source_path() or RAW_LOG
+    if hasattr(parser_module, "reset_parser_state"):
+        parser_module.reset_parser_state()
+
     miner = TemplateMiner()
     records = []
     skipped = 0
+
+    if not source_path.exists():
+        print(f"ERROR: source log not found for dataset {DATASET}")
+        raise SystemExit(1)
 
     with open(source_path, encoding="utf-8", errors="replace") as f:
         for i, line in enumerate(f):
@@ -250,7 +257,7 @@ def parse_with_dataset_parser() -> tuple[pd.DataFrame, int]:
     return pd.DataFrame(records), skipped
 
 
-if not RAW_LOG.exists():
+if CFG["parser"] == "bgl" and not RAW_LOG.exists():
     print(f"ERROR: source log not found: {RAW_LOG}")
     raise SystemExit(1)
 
@@ -469,6 +476,8 @@ else:
     print(f"  Windows     : {len(X):,}")
     print(f"  Features    : {len(feat_cols)}")
     print(f"  Contamination: {contamination:.3f}")
+    if not HAS_LABELS and CFG.get("contamination_note"):
+        print(f"  Note        : {CFG['contamination_note']}")
     print("  Training...")
 
     model = IsolationForest(

@@ -5,17 +5,20 @@
 import pandas as pd
 import numpy as np
 import argparse
+import json
 from pathlib import Path
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import silhouette_score
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
-from dataset_config import DEFAULT_DATASET, dataset_paths
+from dataset_config import DEFAULT_DATASET, dataset_paths, get_dataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset", default=DEFAULT_DATASET)
 args = parser.parse_args()
+CFG = get_dataset(args.dataset)
 PATHS = dataset_paths(args.dataset)
+HAS_LABELS = bool(CFG.get("has_labels", True))
 
 SCORES  = PATHS["scores"]
 PARSED  = PATHS["parsed"]
@@ -24,6 +27,14 @@ OUT     = PATHS["alerts_minilm"]
 print("Loading data...")
 scores = pd.read_parquet(SCORES, engine="pyarrow")
 parsed = pd.read_parquet(PARSED, engine="pyarrow")
+
+
+def assign_unique_noise_ids(labels):
+    labels = labels.copy()
+    noise_positions = np.where(labels == -1)[0]
+    for noise_number, row_index in enumerate(noise_positions, start=1):
+        labels[row_index] = -noise_number
+    return labels
 
 # ── Generate alerts (same logic as alerts.py) ──────────────────────
 p95 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.95)
@@ -39,13 +50,16 @@ for _, row in anomalous.iterrows():
         (parsed["timestamp"] >= row["window_start"]) &
         (parsed["timestamp"] <  row["window_end"])
     ]
-    anom_logs = window_logs[window_logs["is_anomaly"] == 1]
-    if anom_logs.empty:
-        anom_logs = window_logs
-    if anom_logs.empty:
+    if HAS_LABELS:
+        representative_logs = window_logs[window_logs["is_anomaly"] == 1]
+        if representative_logs.empty:
+            representative_logs = window_logs
+    else:
+        representative_logs = window_logs
+    if representative_logs.empty:
         continue
 
-    top_template = (anom_logs["template"]
+    top_template = (representative_logs["template"]
                     .value_counts().index[0])
 
     if row["anomaly_score"] >= p95:
@@ -91,6 +105,7 @@ tfidf_labels = DBSCAN(
 n_tfidf_clusters = len(set(tfidf_labels)) - \
                    (1 if -1 in tfidf_labels else 0)
 n_tfidf_noise    = int((tfidf_labels == -1).sum())
+tfidf_output_labels = assign_unique_noise_ids(tfidf_labels)
 
 print(f"  Clusters  : {n_tfidf_clusters}")
 print(f"  Unique    : {n_tfidf_noise}")
@@ -147,6 +162,7 @@ minilm_labels = DBSCAN(
 n_minilm_clusters = len(set(minilm_labels)) - \
                     (1 if -1 in minilm_labels else 0)
 n_minilm_noise    = int((minilm_labels == -1).sum())
+minilm_output_labels = assign_unique_noise_ids(minilm_labels)
 
 print(f"\n  Clusters  : {n_minilm_clusters}")
 print(f"  Unique    : {n_minilm_noise}")
@@ -193,25 +209,23 @@ print(f"{'Unique alerts':<25} {n_tfidf_noise:>10} "
       f"{n_minilm_noise:>10}")
 print(f"{'Total groups':<25} {tfidf_groups:>10} "
       f"{minilm_groups:>10}")
-print(f"{'Noise reduction':<25} "
-      f"{(1-tfidf_groups/len(alert_df)):.1%}".rjust(10+25) +
-      f" {(1-minilm_groups/len(alert_df)):.1%}".rjust(10))
+print(
+    f"{'Noise reduction':<25} "
+    f"{(1 - tfidf_groups / len(alert_df)):>10.1%} "
+    f"{(1 - minilm_groups / len(alert_df)):>10.1%}"
+)
 print(f"{'Silhouette score':<25} {tfidf_sil:>10.4f} "
       f"{minilm_sil:>10.4f} "
       f"{'MiniLM' if minilm_sil > tfidf_sil else 'TF-IDF':>10}")
 
 # ── Save MiniLM results ────────────────────────────────────────────
-alert_df["cluster_id_tfidf"]   = tfidf_labels
-alert_df["cluster_id_minilm"]  = minilm_labels
+alert_df["cluster_id_tfidf"]   = tfidf_output_labels
+alert_df["cluster_id_minilm"]  = minilm_output_labels
 alert_df.to_parquet(OUT, engine="pyarrow", index=False)
 print(f"\nComparison results saved -> {OUT}")
 print("\nDecision: if MiniLM silhouette > TF-IDF silhouette,")
 print("replace alerts.py clustering with MiniLM.")
 print("Otherwise keep TF-IDF.")
-
-# Save silhouette scores to file for dashboard
-import json
-from pathlib import Path
 
 scores_out = {
     "tfidf_silhouette":  round(float(tfidf_sil), 4),
