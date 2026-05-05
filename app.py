@@ -312,21 +312,17 @@ with t2:
         st.subheader("Predicted Alert-Window Logs by Level")
         alert_level_rows = dataset_frame(
             DATASET,
-            "/logs",
-            {
-                "predicted_only": True,
-                "limit": 1000,
-            },
+            "/levels/predicted-window-distribution",
         )
         if not alert_level_rows.empty:
-            counts = (
-                alert_level_rows
-                .groupby("level")
-                .size()
-                .reset_index(name="sample_count")
-                .sort_values("sample_count", ascending=False)
+            alert_level_rows = alert_level_rows.rename(
+                columns={"count": "log_count"}
             )
-            st.dataframe(counts, use_container_width=True, hide_index=True)
+            st.dataframe(
+                alert_level_rows,
+                use_container_width=True,
+                hide_index=True,
+            )
         else:
             st.info("No predicted alert-window logs found.")
 
@@ -490,14 +486,30 @@ with t5:
         st.warning("Run `python alerts.py` first to generate clusters.")
         st.stop()
 
-    n_clusters = int(alert_summary["clusters"])
-    n_unique = int(alert_summary["unique_alerts"])
+    try:
+        comp = dataset_get(DATASET, "/clustering/comparison")
+        minilm_clusters = dataset_frame(
+            DATASET,
+            "/alerts/minilm/clusters",
+            {"method": "minilm"},
+        )
+        cluster_method = "MiniLM + DBSCAN"
+        n_clusters = int(comp["minilm"]["clusters"])
+        n_unique = int(comp["minilm"]["unique"])
+        noise_reduction = float(comp["minilm"]["noise_reduction"])
+    except Exception:
+        comp = None
+        minilm_clusters = pd.DataFrame()
+        cluster_method = "TF-IDF + DBSCAN"
+        n_clusters = int(alert_summary["clusters"])
+        n_unique = int(alert_summary["unique_alerts"])
+        noise_reduction = float(alert_summary["noise_reduction_pct"])
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Alerts", f"{int(alert_summary['total_alerts']):,}")
     c2.metric("Clusters Found", f"{n_clusters}")
     c3.metric("Unique Alerts", f"{n_unique}")
-    c4.metric("Noise Reduced", f"{alert_summary['noise_reduction_pct']:.1f}%")
+    c4.metric("Noise Reduced", f"{noise_reduction:.1f}%")
 
     st.divider()
     col1, col2 = st.columns(2)
@@ -522,8 +534,13 @@ with t5:
 
     with col2:
         st.subheader("Top 10 Clusters by Size")
-        cluster_summary = dataset_frame(DATASET, "/clusters")
+        if not minilm_clusters.empty:
+            cluster_summary = minilm_clusters
+        else:
+            cluster_summary = dataset_frame(DATASET, "/clusters")
         top_clusters = cluster_summary.head(10).copy()
+        if "cluster_label" not in top_clusters.columns:
+            top_clusters["cluster_label"] = top_clusters["representative_content"]
         top_clusters["label"] = top_clusters["representative_content"].str[:70]
         fig = px.bar(
             top_clusters,
@@ -544,8 +561,11 @@ with t5:
         st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
-    st.subheader("All Alert Clusters")
-    cluster_summary = dataset_frame(DATASET, "/clusters")
+    st.subheader(f"All Alert Clusters - {cluster_method}")
+    if not minilm_clusters.empty:
+        cluster_summary = minilm_clusters
+    else:
+        cluster_summary = dataset_frame(DATASET, "/clusters")
     for _, cluster in cluster_summary.sort_values("cluster_id").iterrows():
         cid = int(cluster["cluster_id"])
         label = str(cluster["representative_content"])
@@ -554,8 +574,14 @@ with t5:
         critical_count = int(cluster["critical_count"])
 
         # icon = "🔴" if critical_count > 0 else "🟠"
-        cluster_alerts = alerts[alerts["cluster_id"] == cid]
+        cluster_alerts = (
+            pd.DataFrame({"severity": []})
+            if not minilm_clusters.empty
+            else alerts[alerts["cluster_id"] == cid]
+        )
         sev_counts = cluster_alerts["severity"].value_counts().to_dict()
+        if not minilm_clusters.empty and critical_count > 0:
+            sev_counts["CRITICAL"] = critical_count
         if sev_counts.get("CRITICAL", 0) > 0:
             icon = "🔴"
         elif sev_counts.get("HIGH", 0) > 0:
@@ -575,7 +601,14 @@ with t5:
             c2.metric("Max anomaly score", f"{worst:.3f}")
             c3.metric("Critical alerts", critical_count)
 
-            display = dataset_frame(DATASET, f"/clusters/{cid}/alerts")
+            if not minilm_clusters.empty:
+                display = dataset_frame(
+                    DATASET,
+                    f"/alerts/minilm/clusters/{cid}",
+                    {"method": "minilm"},
+                )
+            else:
+                display = dataset_frame(DATASET, f"/clusters/{cid}/alerts")
             display["Time (UTC)"] = display["window_start"].apply(unix_to_readable)
             display = display.rename(
                 columns={
@@ -588,27 +621,25 @@ with t5:
                 }
             )
             display["Score"] = display["Score"].round(3)
+            cluster_columns = [
+                "Time (UTC)",
+                "Severity",
+                "Score",
+                "Total Logs",
+                "Level",
+                "Error Content",
+            ]
+            if HAS_LABELS:
+                cluster_columns.insert(3, "Anomaly Lines")
             st.dataframe(
-                display[
-                    [
-                        "Time (UTC)",
-                        "Severity",
-                        "Score",
-                        "Anomaly Lines",
-                        "Total Logs",
-                        "Level",
-                        "Error Content",
-                    ]
-                ],
+                display[cluster_columns],
                 use_container_width=True,
                 hide_index=True,
             )
 
     st.divider()
     st.subheader("🔬 Clustering Method Comparison")
-    try:
-        comp = dataset_get(DATASET, "/clustering/comparison")
-
+    if comp:
         comparison = pd.DataFrame(
             [
                 {
@@ -631,10 +662,10 @@ with t5:
 
         method = st.radio(
             "View clusters for:",
-            ["TF-IDF + DBSCAN", "MiniLM + DBSCAN"],
+            ["MiniLM + DBSCAN", "TF-IDF + DBSCAN"],
             horizontal=True,
         )
-        method_key = "tfidf" if method == "TF-IDF + DBSCAN" else "minilm"
+        method_key = "minilm" if method == "MiniLM + DBSCAN" else "tfidf"
         comparison_clusters = dataset_frame(
             DATASET,
             "/alerts/minilm/clusters", {"method": method_key}
@@ -674,20 +705,20 @@ with t5:
                     }
                 )
                 rows["Score"] = rows["Score"].round(3)
+                comparison_columns = [
+                    "Time (UTC)",
+                    "Severity",
+                    "Score",
+                    "Total Logs",
+                    "Level",
+                    "Error Content",
+                ]
+                if HAS_LABELS:
+                    comparison_columns.insert(3, "Anomaly Lines")
                 st.dataframe(
-                    rows[
-                        [
-                            "Time (UTC)",
-                            "Severity",
-                            "Score",
-                            "Anomaly Lines",
-                            "Total Logs",
-                            "Level",
-                            "Error Content",
-                        ]
-                    ],
+                    rows[comparison_columns],
                     use_container_width=True,
                     hide_index=True,
                 )
-    except Exception:
+    else:
         st.info("Run `python alerts_minilm.py` to see clustering comparison.")
