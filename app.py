@@ -280,16 +280,18 @@ with t2:
         color = "background-color: #ffcccc" if row["is_anomaly"] else ""
         return [color] * len(row)
 
-    display_cols = [
-        "line_id",
-        "date",
-        "node",
-        "level",
-        "is_anomaly",
-        "template",
-        "content",
-    ]
     if not page_view.empty:
+        page_view = page_view.copy()
+        page_view["Time (UTC)"] = page_view["timestamp"].apply(unix_to_readable)
+        display_cols = [
+            "line_id",
+            "Time (UTC)",
+            "node",
+            "level",
+            "is_anomaly",
+            "template",
+            "content",
+        ]
         st.dataframe(
             page_view[display_cols].style.apply(highlight, axis=1),
             use_container_width=True,

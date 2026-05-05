@@ -162,8 +162,8 @@ def parse_bgl() -> tuple[pd.DataFrame, int]:
         r"(?P<node2>\S+)\s+"
         r"(?P<type>\S+)\s+"
         r"(?P<component>\S+)\s+"
-        r"(?P<level>INFO|WARN|WARNING|ERROR|FATAL|SEVERE|FAILURE|CRITICAL)\s+"
-        r"(?P<content>.+)$"
+        r"(?P<level>INFO|WARN|WARNING|ERROR|FATAL|SEVERE|FAILURE|CRITICAL)"
+        r"(?:\s+(?P<content>.*))?$"
     )
     bgl_re_short = re.compile(
         r"^(?P<label>\S+)\s+"
@@ -173,8 +173,8 @@ def parse_bgl() -> tuple[pd.DataFrame, int]:
         r"(?P<time>\S+)\s+"
         r"(?P<type>\S+)\s+"
         r"(?P<component>\S+)\s+"
-        r"(?P<level>INFO|WARN|WARNING|ERROR|FATAL|SEVERE|FAILURE|CRITICAL)\s+"
-        r"(?P<content>.+)$"
+        r"(?P<level>INFO|WARN|WARNING|ERROR|FATAL|SEVERE|FAILURE|CRITICAL)"
+        r"(?:\s+(?P<content>.*))?$"
     )
 
     miner = TemplateMiner()
@@ -201,7 +201,8 @@ def parse_bgl() -> tuple[pd.DataFrame, int]:
             if node == "-" or fmt == "short":
                 node = "SYSTEM"
 
-            result = miner.add_log_message(data["content"])
+            content = (data.get("content") or "").strip() or "<EMPTY>"
+            result = miner.add_log_message(content)
             records.append({
                 "line_id": i,
                 "is_anomaly": int(data["label"] != "-"),
@@ -210,7 +211,7 @@ def parse_bgl() -> tuple[pd.DataFrame, int]:
                 "node": node,
                 "level": data["level"],
                 "component": data["component"],
-                "content": data["content"],
+                "content": content,
                 "event_id": result["cluster_id"],
                 "template": result["template_mined"],
             })
