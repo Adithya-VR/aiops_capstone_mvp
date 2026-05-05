@@ -1,17 +1,18 @@
 import argparse
 import pandas as pd
-from dataset_config import DEFAULT_DATASET, dataset_paths
+from dataset_config import DEFAULT_DATASET, dataset_paths, get_dataset
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset", default=DEFAULT_DATASET)
 args = parser.parse_args()
+CFG = get_dataset(args.dataset)
 PATHS = dataset_paths(args.dataset)
 
 PARSED = PATHS["parsed"]
 FEATURES = PATHS["features"]
-WINDOW = 3600
-STEP = 1800
+WINDOW = int(CFG["window"])
+STEP = int(CFG["step"])
 
 
 def main() -> None:

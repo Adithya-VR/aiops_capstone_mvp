@@ -3,12 +3,13 @@ import argparse
 from pathlib import Path
 
 import pandas as pd
-from dataset_config import DEFAULT_DATASET, dataset_paths
+from dataset_config import DEFAULT_DATASET, dataset_paths, get_dataset
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset", default=DEFAULT_DATASET)
 args = parser.parse_args()
+CFG = get_dataset(args.dataset)
 PATHS = dataset_paths(args.dataset)
 
 SCORES = PATHS["scores"]
@@ -29,21 +30,9 @@ def main() -> None:
     scores = pd.read_parquet(SCORES, engine="pyarrow")
     parsed = pd.read_parquet(PARSED, engine="pyarrow")
     metrics = json.loads(METRICS.read_text(encoding="utf-8"))
-    cm = metrics["confusion_matrix"]
+    has_labels = bool(CFG.get("has_labels", True))
 
     errors = []
-
-    total_from_cm = (
-        cm["true_negative"]
-        + cm["false_positive"]
-        + cm["false_negative"]
-        + cm["true_positive"]
-    )
-    if total_from_cm != len(scores):
-        errors.append(
-            f"confusion matrix total {total_from_cm} != "
-            f"scores rows {len(scores)}"
-        )
 
     if metrics["total_windows"] != len(scores):
         errors.append(
@@ -51,12 +40,34 @@ def main() -> None:
             f"scores rows {len(scores)}"
         )
 
-    gt_anomalous = int(scores["is_anomaly"].sum())
-    if metrics["anomalous_windows"] != gt_anomalous:
+    predicted_alerts = int(scores["predicted"].sum())
+    if metrics["predicted_anomalous_windows"] != predicted_alerts:
         errors.append(
-            f"metrics anomalous_windows {metrics['anomalous_windows']} != "
-            f"scores is_anomaly sum {gt_anomalous}"
+            "metrics predicted_anomalous_windows "
+            f"{metrics['predicted_anomalous_windows']} != "
+            f"scores predicted sum {predicted_alerts}"
         )
+
+    gt_anomalous = int(scores["is_anomaly"].sum())
+    if has_labels:
+        cm = metrics["confusion_matrix"]
+        total_from_cm = (
+            cm["true_negative"]
+            + cm["false_positive"]
+            + cm["false_negative"]
+            + cm["true_positive"]
+        )
+        if total_from_cm != len(scores):
+            errors.append(
+                f"confusion matrix total {total_from_cm} != "
+                f"scores rows {len(scores)}"
+            )
+
+        if metrics["anomalous_windows"] != gt_anomalous:
+            errors.append(
+                f"metrics anomalous_windows {metrics['anomalous_windows']} != "
+                f"scores is_anomaly sum {gt_anomalous}"
+            )
 
     predicted = set(scores["predicted"].dropna().unique())
     if not predicted.issubset({0, 1}):
@@ -83,10 +94,13 @@ def main() -> None:
     print("All checks passed.")
     print(f"  Parsed log rows : {len(parsed):,}")
     print(f"  Total windows   : {len(scores):,}")
-    print(f"  Anomalous truth : {gt_anomalous:,}")
-    print(f"  Predicted alerts: {int(scores['predicted'].sum()):,}")
-    print(f"  F1 anomaly      : {metrics['f1_anomaly']:.4f}")
-    print(f"  Accuracy        : {metrics['accuracy']:.2%}")
+    if has_labels:
+        print(f"  Anomalous truth : {gt_anomalous:,}")
+        print(f"  F1 anomaly      : {metrics['f1_anomaly']:.4f}")
+        print(f"  Accuracy        : {metrics['accuracy']:.2%}")
+    else:
+        print("  Anomalous truth : not available")
+    print(f"  Predicted alerts: {predicted_alerts:,}")
 
     top5 = scores.nlargest(5, "anomaly_score")
     print("\nTop 5 most anomalous windows:")
@@ -100,8 +114,10 @@ def main() -> None:
         logs = parsed[
             (parsed["timestamp"] >= row["window_start"])
             & (parsed["timestamp"] < row["window_end"])
-            & (parsed["is_anomaly"] == 1)
-        ].head(5)
+        ]
+        if has_labels:
+            logs = logs[logs["is_anomaly"] == 1]
+        logs = logs.head(5)
 
         for _, log in logs.iterrows():
             print(f"  [{log['level']}] {log['node']}: {log['template']}")

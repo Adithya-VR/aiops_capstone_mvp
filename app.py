@@ -96,6 +96,7 @@ selected_label = st.sidebar.selectbox(
 )
 DATASET = dataset_labels[selected_label]
 dataset_meta = next(d for d in ready_datasets if d["name"] == DATASET)
+HAS_LABELS = bool(dataset_meta.get("has_labels", True))
 
 stats, levels, scores, alerts, alert_summary = load_required_data(DATASET)
 
@@ -145,8 +146,15 @@ with t1:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Log Lines", f"{int(stats['total_logs']):,}")
     c2.metric("Unique Templates", f"{int(stats['unique_templates']):,}")
-    c3.metric("Anomalous Lines", f"{int(stats['anomalous_lines']):,}")
-    c4.metric("Line Anomaly Rate", f"{stats['anomaly_rate_pct']:.2f}%")
+    if HAS_LABELS:
+        c3.metric("Anomalous Lines", f"{int(stats['anomalous_lines']):,}")
+        c4.metric("Line Anomaly Rate", f"{stats['anomaly_rate_pct']:.2f}%")
+    else:
+        c3.metric("Labeled Anomalous Lines", "N/A")
+        c4.metric(
+            "Predicted Alert Windows",
+            f"{int(stats.get('anomalous_windows', scores['predicted'].sum())):,}",
+        )
 
     st.divider()
     col1, col2 = st.columns(2)
@@ -202,7 +210,12 @@ with t2:
     st.header("Log Explorer")
 
     c1, c2, c3 = st.columns(3)
-    f_show = c1.selectbox("Show", ["All", "Anomalies only", "Normal only"])
+    show_options = (
+        ["All", "Anomalies only", "Normal only"]
+        if HAS_LABELS
+        else ["All", "Predicted alert-window logs", "Non-alert-window logs"]
+    )
+    f_show = c1.selectbox("Show", show_options)
     f_level = c2.multiselect("Log Level", options=levels, default=levels)
     f_search = c3.text_input("Search in content", "")
 
@@ -220,8 +233,12 @@ with t2:
         "offset": (st.session_state.log_page - 1) * PAGE_SIZE,
         "level": ",".join(f_level),
         "search": f_search or None,
-        "anomaly_only": f_show == "Anomalies only",
-        "normal_only": f_show == "Normal only",
+        "anomaly_only": HAS_LABELS and f_show == "Anomalies only",
+        "normal_only": HAS_LABELS and f_show == "Normal only",
+        "predicted_only": (not HAS_LABELS)
+        and f_show == "Predicted alert-window logs",
+        "non_predicted_only": (not HAS_LABELS)
+        and f_show == "Non-alert-window logs",
     }
     payload = dataset_get(DATASET, "/logs", params)
     total_rows = int(payload["total"])
@@ -282,14 +299,36 @@ with t2:
         st.info("No logs match the current filters.")
 
     st.divider()
-    st.subheader("Anomaly Labels by Log Level")
-    level_anomalies = dataset_frame(DATASET, "/levels/anomaly-distribution")
-    st.dataframe(level_anomalies, use_container_width=True, hide_index=True)
-    st.caption(
-        "These are the dataset ground-truth labels by log level. "
-        "In the current BGL labels, anomalous lines appear in FATAL and "
-        "a small number of FAILURE rows; the other levels are labeled normal."
-    )
+    if HAS_LABELS:
+        st.subheader("Anomaly Labels by Log Level")
+        level_anomalies = dataset_frame(DATASET, "/levels/anomaly-distribution")
+        st.dataframe(level_anomalies, use_container_width=True, hide_index=True)
+        st.caption(
+            "These are the dataset ground-truth labels by log level. "
+            "In the current BGL labels, anomalous lines appear in FATAL and "
+            "a small number of FAILURE rows; the other levels are labeled normal."
+        )
+    else:
+        st.subheader("Predicted Alert-Window Logs by Level")
+        alert_level_rows = dataset_frame(
+            DATASET,
+            "/logs",
+            {
+                "predicted_only": True,
+                "limit": 1000,
+            },
+        )
+        if not alert_level_rows.empty:
+            counts = (
+                alert_level_rows
+                .groupby("level")
+                .size()
+                .reset_index(name="sample_count")
+                .sort_values("sample_count", ascending=False)
+            )
+            st.dataframe(counts, use_container_width=True, hide_index=True)
+        else:
+            st.info("No predicted alert-window logs found.")
 
 with t3:
     st.header("Anomaly Timeline")
@@ -335,33 +374,60 @@ with t3:
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Score vs Log Volume")
+        point_color = (
+            timeline["is_anomaly"].map({0: "Normal", 1: "Anomaly"})
+            if HAS_LABELS
+            else timeline["predicted"].map({0: "Not Flagged", 1: "Flagged"})
+        )
+        color_map = (
+            {"Normal": "#1D9E75", "Anomaly": "#E24B4A"}
+            if HAS_LABELS
+            else {"Not Flagged": "#1D9E75", "Flagged": "#E24B4A"}
+        )
         fig = px.scatter(
             timeline,
             x="total_logs",
             y="anomaly_score",
-            color=timeline["is_anomaly"].map({0: "Normal", 1: "Anomaly"}),
-            color_discrete_map={"Normal": "#1D9E75", "Anomaly": "#E24B4A"},
+            color=point_color,
+            color_discrete_map=color_map,
             opacity=0.6,
             labels={
                 "total_logs": "Logs in Window",
                 "anomaly_score": "Anomaly Score",
-                "color": "Ground Truth",
+                "color": "Ground Truth" if HAS_LABELS else "Prediction",
             },
         )
         st.plotly_chart(fig, use_container_width=True)
     with col2:
-        st.subheader("Confusion Matrix")
-        cm = pd.crosstab(
-            timeline["is_anomaly"].map({0: "Normal", 1: "Anomaly"}),
-            timeline["predicted"].map({0: "Normal", 1: "Anomaly"}),
-            rownames=["Actual"],
-            colnames=["Predicted"],
-        )
-        fig = px.imshow(cm, text_auto=True, color_continuous_scale="Blues")
+        if HAS_LABELS:
+            st.subheader("Confusion Matrix")
+            cm = pd.crosstab(
+                timeline["is_anomaly"].map({0: "Normal", 1: "Anomaly"}),
+                timeline["predicted"].map({0: "Normal", 1: "Anomaly"}),
+                rownames=["Actual"],
+                colnames=["Predicted"],
+            )
+            fig = px.imshow(cm, text_auto=True, color_continuous_scale="Blues")
+        else:
+            st.subheader("Prediction Counts")
+            pred_counts = (
+                timeline["predicted"]
+                .map({0: "Not Flagged", 1: "Flagged"})
+                .value_counts()
+                .reset_index()
+            )
+            pred_counts.columns = ["prediction", "windows"]
+            fig = px.bar(
+                pred_counts,
+                x="prediction",
+                y="windows",
+                color="prediction",
+                color_discrete_map=color_map,
+            )
         st.plotly_chart(fig, use_container_width=True)
 
 with t4:
-    st.header("Top Anomalous Windows")
+    st.header("Top Anomalous Windows" if HAS_LABELS else "Top Predicted Alert Windows")
 
     anomalous_scores = scores[scores["predicted"] == 1]["anomaly_score"]
     p95 = float(anomalous_scores.quantile(0.95))
@@ -380,17 +446,24 @@ with t4:
         else:
             sev = "🟢 LOW"
 
+        evidence_label = (
+            f"Anomalous lines: {int(row['anomaly_count'])}"
+            if HAS_LABELS
+            else f"Logs in window: {int(row['total_logs'])}"
+        )
         label = (
             f"{sev} | Score: {score:.3f} | "
-            f"Anomalous lines: {int(row['anomaly_count'])} | "
-            f"{unix_to_readable(row['window_start'])}"
+            f"{evidence_label} | {unix_to_readable(row['window_start'])}"
         )
 
         with st.expander(label):
             c1, c2, c3 = st.columns(3)
             c1.metric("Anomaly Score", f"{score:.3f}")
             c2.metric("Total Logs", f"{int(row['total_logs'])}")
-            c3.metric("Anomalous Lines", f"{int(row['anomaly_count'])}")
+            if HAS_LABELS:
+                c3.metric("Anomalous Lines", f"{int(row['anomaly_count'])}")
+            else:
+                c3.metric("Ground Truth", "N/A")
 
             logs = dataset_frame(
                 DATASET,

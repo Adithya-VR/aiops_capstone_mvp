@@ -160,6 +160,8 @@ def get_stats(dataset: str = DEFAULT_DATASET):
     return {
         "dataset": dataset,
         "display_name": cfg["display_name"],
+        "has_labels": cfg.get("has_labels", True),
+        "evaluation_mode": cfg.get("evaluation_mode", "supervised"),
         **result,
         **score_result,
     }
@@ -172,6 +174,8 @@ def get_logs(
     level: Optional[str] = Query(None),
     anomaly_only: bool = Query(False),
     normal_only: bool = Query(False),
+    predicted_only: bool = Query(False),
+    non_predicted_only: bool = Query(False),
     search: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -179,7 +183,11 @@ def get_logs(
     paths = paths_for(dataset)
     if err := require_file(paths, "parsed", "Run pipeline.py first"):
         return err
+    if predicted_only or non_predicted_only:
+        if err := require_file(paths, "scores", "Run pipeline.py first"):
+            return err
     parsed = parquet(paths, "parsed")
+    scores = parquet(paths, "scores")
 
     where = ["1=1"]
     levels = csv_values(level)
@@ -191,6 +199,26 @@ def get_logs(
         where.append("is_anomaly = 1")
     if normal_only:
         where.append("is_anomaly = 0")
+    if predicted_only:
+        where.append(f"""
+            EXISTS (
+                SELECT 1
+                FROM '{scores}' s
+                WHERE s.predicted = 1
+                  AND p.timestamp >= s.window_start
+                  AND p.timestamp < s.window_end
+            )
+        """)
+    if non_predicted_only:
+        where.append(f"""
+            NOT EXISTS (
+                SELECT 1
+                FROM '{scores}' s
+                WHERE s.predicted = 1
+                  AND p.timestamp >= s.window_start
+                  AND p.timestamp < s.window_end
+            )
+        """)
     if search:
         safe = search.replace("'", "''")
         where.append(f"content ILIKE '%{safe}%'")
@@ -199,14 +227,14 @@ def get_logs(
     rows = query(f"""
         SELECT line_id, timestamp, date, node, level,
                is_anomaly, template, content
-        FROM '{parsed}'
+        FROM '{parsed}' p
         WHERE {where_sql}
         ORDER BY line_id
         LIMIT {int(limit)} OFFSET {int(offset)}
     """)
     total = scalar(f"""
         SELECT COUNT(*) AS total
-        FROM '{parsed}'
+        FROM '{parsed}' p
         WHERE {where_sql}
     """)
     return {"total": total, "limit": limit, "offset": offset, "data": rows}
@@ -591,6 +619,7 @@ def get_clusters(dataset: str = DEFAULT_DATASET):
         return err
     alerts = parquet(paths, "alerts")
     parsed = parquet(paths, "parsed")
+    label_clause = "AND p.is_anomaly = 1" if get_dataset(dataset).get("has_labels", True) else ""
 
     rows = query(f"""
         WITH cluster_stats AS (
@@ -628,7 +657,7 @@ def get_clusters(dataset: str = DEFAULT_DATASET):
                 JOIN '{parsed}' p
                   ON p.timestamp >= a.window_start
                  AND p.timestamp <  a.window_end
-                 AND p.is_anomaly = 1
+                 {label_clause}
                 GROUP BY a.cluster_id, p.content, p.level
             )
             WHERE rn = 1

@@ -9,8 +9,23 @@ DATASETS = {
         "raw_path": Path("data/BGL.log"),
         "output_dir": Path("output/bgl"),
         "parser": "bgl",
+        "has_labels": True,
+        "evaluation_mode": "supervised",
         "window": 3600,
         "step": 1800,
+    },
+    "openssh": {
+        "name": "openssh",
+        "display_name": "OpenSSH",
+        "description": "OpenSSH authentication logs",
+        "raw_path": Path("data/OpenSSH/SSH.log"),
+        "output_dir": Path("output/openssh"),
+        "parser": "openssh",
+        "has_labels": False,
+        "evaluation_mode": "unlabeled",
+        "window": 300,
+        "step": 150,
+        "contamination": 0.03,
     }
 }
 
@@ -52,6 +67,8 @@ def available_datasets() -> list[dict]:
             "description": cfg["description"],
             "status": "ready" if ready else "not_ready",
             "parser": cfg["parser"],
+            "has_labels": cfg["has_labels"],
+            "evaluation_mode": cfg["evaluation_mode"],
             "window": cfg["window"],
             "step": cfg["step"],
             "files": {
