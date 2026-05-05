@@ -2,3 +2,4 @@ venv/
 BGL.log
 parsed.parquet
 __pycache__/
+data
