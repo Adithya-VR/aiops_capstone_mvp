@@ -1,8 +1,15 @@
+import argparse
 import pandas as pd
+from dataset_config import DEFAULT_DATASET, dataset_paths
 
 
-PARSED = "output/parsed.parquet"
-FEATURES = "output/features.parquet"
+parser = argparse.ArgumentParser()
+parser.add_argument("--dataset", default=DEFAULT_DATASET)
+args = parser.parse_args()
+PATHS = dataset_paths(args.dataset)
+
+PARSED = PATHS["parsed"]
+FEATURES = PATHS["features"]
 WINDOW = 3600
 STEP = 1800
 

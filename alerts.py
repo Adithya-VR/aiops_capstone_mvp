@@ -1,13 +1,20 @@
 import pandas as pd
 import numpy as np
 import duckdb
+import argparse
 from pathlib import Path
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import normalize
+from dataset_config import DEFAULT_DATASET, dataset_paths
 
-SCORES  = Path("output/scores.parquet")
-PARSED  = Path("output/parsed.parquet")
-ALERTS  = Path("output/alerts.parquet")
+parser = argparse.ArgumentParser()
+parser.add_argument("--dataset", default=DEFAULT_DATASET)
+args = parser.parse_args()
+PATHS = dataset_paths(args.dataset)
+
+SCORES  = PATHS["scores"]
+PARSED  = PATHS["parsed"]
+ALERTS  = PATHS["alerts"]
 
 print("Generating alerts from anomalous windows...")
 

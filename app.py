@@ -34,13 +34,25 @@ def api_frame(path, params=None, key="data"):
     return pd.DataFrame(api_get(path, params).get(key, []))
 
 
-def load_required_data():
+def dataset_path(dataset, path):
+    return f"/datasets/{dataset}{path}"
+
+
+def dataset_get(dataset, path, params=None):
+    return api_get(dataset_path(dataset, path), params)
+
+
+def dataset_frame(dataset, path, params=None, key="data"):
+    return pd.DataFrame(dataset_get(dataset, path, params).get(key, []))
+
+
+def load_required_data(dataset):
     try:
-        stats = api_get("/stats")
-        levels = api_get("/levels")["data"]
-        scores = api_frame("/scores/timeline")
-        alerts = api_frame("/alerts", {"limit": 5000})
-        alert_summary = api_get("/alerts/summary")
+        stats = dataset_get(dataset, "/stats")
+        levels = dataset_get(dataset, "/levels")["data"]
+        scores = dataset_frame(dataset, "/scores/timeline")
+        alerts = dataset_frame(dataset, "/alerts", {"limit": 5000})
+        alert_summary = dataset_get(dataset, "/alerts/summary")
         return stats, levels, scores, alerts, alert_summary
     except Exception as exc:
         st.error(f"Could not load data from FastAPI: {exc}")
@@ -57,14 +69,42 @@ st.set_page_config(
     layout="wide",
 )
 
-stats, levels, scores, alerts, alert_summary = load_required_data()
+try:
+    dataset_payload = api_get("/datasets")
+    dataset_rows = dataset_payload.get("datasets", [])
+except Exception as exc:
+    st.error(f"Could not reach FastAPI: {exc}")
+    st.info(
+        "Start the API first: "
+        "`uvicorn api.main:app --host 127.0.0.1 --port 8000`"
+    )
+    st.stop()
+
+ready_datasets = [d for d in dataset_rows if d.get("status") == "ready"]
+if not ready_datasets:
+    st.error("No processed datasets are ready.")
+    st.info("Run the pipeline for at least one dataset first.")
+    st.stop()
+
+dataset_labels = {
+    f"{d['display_name']} ({d['name']})": d["name"]
+    for d in ready_datasets
+}
+selected_label = st.sidebar.selectbox(
+    "Dataset",
+    options=list(dataset_labels.keys()),
+)
+DATASET = dataset_labels[selected_label]
+dataset_meta = next(d for d in ready_datasets if d["name"] == DATASET)
+
+stats, levels, scores, alerts, alert_summary = load_required_data(DATASET)
 
 score_min = float(stats.get("score_min", scores["anomaly_score"].min()))
 score_max = float(stats.get("score_max", scores["anomaly_score"].max()))
 score_p90 = float(scores["anomaly_score"].quantile(0.90))
 
 st.sidebar.title("🔍 AIOps Dashboard")
-st.sidebar.caption("Dataset: BGL (BlueGene/L)")
+st.sidebar.caption(f"Dataset: {dataset_meta['display_name']}")
 st.sidebar.caption(f"API: {API_BASE}")
 st.sidebar.divider()
 st.sidebar.metric("Total Log Lines", f"{int(stats['total_logs']):,}")
@@ -113,7 +153,7 @@ with t1:
 
     with col1:
         st.subheader("Log Level Distribution")
-        level_counts = api_frame("/levels/distribution")
+        level_counts = dataset_frame(DATASET, "/levels/distribution")
         fig = px.pie(
             level_counts,
             names="level",
@@ -124,7 +164,7 @@ with t1:
 
     with col2:
         st.subheader("Top 15 Log Templates")
-        top_templates = api_frame("/templates/top", {"limit": 15})
+        top_templates = dataset_frame(DATASET, "/templates/top", {"limit": 15})
         top_templates["short"] = top_templates["template"].str[:55]
         fig = px.bar(
             top_templates,
@@ -140,7 +180,7 @@ with t1:
 
     st.divider()
     st.subheader("Anomaly Score Distribution")
-    hist = api_frame("/scores/histogram", {"bins": 80})
+    hist = dataset_frame(DATASET, "/scores/histogram", {"bins": 80})
     hist["bin_mid"] = (hist["bin_start"] + hist["bin_end"]) / 2
     fig = px.bar(
         hist,
@@ -183,7 +223,7 @@ with t2:
         "anomaly_only": f_show == "Anomalies only",
         "normal_only": f_show == "Normal only",
     }
-    payload = api_get("/logs", params)
+    payload = dataset_get(DATASET, "/logs", params)
     total_rows = int(payload["total"])
     page_view = pd.DataFrame(payload["data"])
     total_pages = max(1, (total_rows + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -243,7 +283,7 @@ with t2:
 
     st.divider()
     st.subheader("Anomaly Labels by Log Level")
-    level_anomalies = api_frame("/levels/anomaly-distribution")
+    level_anomalies = dataset_frame(DATASET, "/levels/anomaly-distribution")
     st.dataframe(level_anomalies, use_container_width=True, hide_index=True)
     st.caption(
         "These are the dataset ground-truth labels by log level. "
@@ -352,7 +392,8 @@ with t4:
             c2.metric("Total Logs", f"{int(row['total_logs'])}")
             c3.metric("Anomalous Lines", f"{int(row['anomaly_count'])}")
 
-            logs = api_frame(
+            logs = dataset_frame(
+                DATASET,
                 "/logs/window",
                 {
                     "window_start": int(row["window_start"]),
@@ -408,7 +449,7 @@ with t5:
 
     with col2:
         st.subheader("Top 10 Clusters by Size")
-        cluster_summary = api_frame("/clusters")
+        cluster_summary = dataset_frame(DATASET, "/clusters")
         top_clusters = cluster_summary.head(10).copy()
         top_clusters["label"] = top_clusters["representative_content"].str[:70]
         fig = px.bar(
@@ -431,7 +472,7 @@ with t5:
 
     st.divider()
     st.subheader("All Alert Clusters")
-    cluster_summary = api_frame("/clusters")
+    cluster_summary = dataset_frame(DATASET, "/clusters")
     for _, cluster in cluster_summary.sort_values("cluster_id").iterrows():
         cid = int(cluster["cluster_id"])
         label = str(cluster["representative_content"])
@@ -461,7 +502,7 @@ with t5:
             c2.metric("Max anomaly score", f"{worst:.3f}")
             c3.metric("Critical alerts", critical_count)
 
-            display = api_frame(f"/clusters/{cid}/alerts")
+            display = dataset_frame(DATASET, f"/clusters/{cid}/alerts")
             display["Time (UTC)"] = display["window_start"].apply(unix_to_readable)
             display = display.rename(
                 columns={
@@ -493,7 +534,7 @@ with t5:
     st.divider()
     st.subheader("🔬 Clustering Method Comparison")
     try:
-        comp = api_get("/clustering/comparison")
+        comp = dataset_get(DATASET, "/clustering/comparison")
 
         comparison = pd.DataFrame(
             [
@@ -521,7 +562,8 @@ with t5:
             horizontal=True,
         )
         method_key = "tfidf" if method == "TF-IDF + DBSCAN" else "minilm"
-        comparison_clusters = api_frame(
+        comparison_clusters = dataset_frame(
+            DATASET,
             "/alerts/minilm/clusters", {"method": method_key}
         )
 
@@ -542,7 +584,8 @@ with t5:
             )
 
             with st.expander(title):
-                rows = api_frame(
+                rows = dataset_frame(
+                    DATASET,
                     f"/alerts/minilm/clusters/{cid}",
                     {"method": method_key},
                 )

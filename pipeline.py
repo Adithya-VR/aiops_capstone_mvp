@@ -1,5 +1,6 @@
 import re
 import pickle
+import argparse
 import pandas as pd
 import numpy as np
 import json
@@ -16,15 +17,24 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from dataset_config import DEFAULT_DATASET, dataset_paths, get_dataset
 
 # ── Paths ──────────────────────────────────────────────────────────
-Path("output").mkdir(exist_ok=True)
-BGL_LOG  = Path("data/BGL.log")
-PARSED   = Path("output/parsed.parquet")
-FEATURES = Path("output/features.parquet")
-SCORES   = Path("output/scores.parquet")
-MODEL    = Path("output/model.pkl")
-METRICS  = Path("output/metrics.json")
+parser = argparse.ArgumentParser()
+parser.add_argument("--dataset", default=DEFAULT_DATASET)
+args = parser.parse_args()
+
+DATASET = args.dataset.lower()
+CFG = get_dataset(DATASET)
+PATHS = dataset_paths(DATASET)
+PATHS["output_dir"].mkdir(parents=True, exist_ok=True)
+
+BGL_LOG  = PATHS["raw"]
+PARSED   = PATHS["parsed"]
+FEATURES = PATHS["features"]
+SCORES   = PATHS["scores"]
+MODEL    = PATHS["model"]
+METRICS  = PATHS["metrics"]
 
 WINDOW = 3600
 STEP = 1800
@@ -47,7 +57,7 @@ def write_metrics(scores: pd.DataFrame, path: Path = METRICS) -> dict:
         roc_auc = 0.0
 
     metrics = {
-        "dataset": "bgl",
+        "dataset": DATASET,
         "total_windows": int(len(scores)),
         "anomalous_windows": int(y_true.sum()),
         "normal_windows": int((y_true == 0).sum()),
@@ -134,7 +144,7 @@ print("="*50)
 
 if PARSED.exists():
     print("  parsed.parquet already exists — skipping.")
-    print("  Delete output/parsed.parquet to re-run.\n")
+    print(f"  Delete {PARSED} to re-run.\n")
 else:
     # BGL_RE = re.compile(
     #     r'^(?P<label>\S+)\s+'
@@ -252,11 +262,11 @@ print("="*50)
 
 if has_sliding_window_features(FEATURES):
     print("  features.parquet already uses sliding windows - skipping.")
-    print("  Delete output/features.parquet to force a rebuild.\n")
+    print(f"  Delete {FEATURES} to force a rebuild.\n")
 else:
     if FEATURES.exists():
         print("  Existing features are not sliding-window features.")
-        print("  Rebuilding output/features.parquet with current config.\n")
+        print(f"  Rebuilding {FEATURES} with current config.\n")
 
     parsed = pd.read_parquet(PARSED, engine="pyarrow")
     parsed = parsed.sort_values("timestamp").reset_index(drop=True)
@@ -365,7 +375,7 @@ if SCORES.exists():
 
 if use_existing_scores:
     print("  scores.parquet already matches current window config - skipping.")
-    print("  Delete output/scores.parquet to force a retrain.\n")
+    print(f"  Delete {SCORES} to force a retrain.\n")
     metrics = write_metrics(scores)
     print(f"  Metrics synced -> {METRICS}")
     print(
@@ -375,7 +385,7 @@ if use_existing_scores:
 else:
     if SCORES.exists():
         print("  Existing scores do not match current window config.")
-        print("  Retraining model and overwriting output/scores.parquet.\n")
+        print(f"  Retraining model and overwriting {SCORES}.\n")
 
     META_COLS = [
         "window_start",
