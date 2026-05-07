@@ -408,7 +408,7 @@ else:
         contamination=contamination,
         max_samples="auto",
         random_state=42,
-        n_jobs=1,
+        n_jobs=-1,
     )
     model.fit(X_scaled)
 
