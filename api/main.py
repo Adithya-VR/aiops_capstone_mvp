@@ -536,6 +536,12 @@ def get_minilm_clusters(
             SELECT {cid_col} AS cluster_id,
                    COUNT(*) AS alert_count,
                    ROUND(MAX(anomaly_score), 4) AS max_score,
+                   SUM(CASE WHEN severity = 'LOW' THEN 1 ELSE 0 END)
+                       AS low_count,
+                   SUM(CASE WHEN severity = 'MEDIUM' THEN 1 ELSE 0 END)
+                       AS medium_count,
+                   SUM(CASE WHEN severity = 'HIGH' THEN 1 ELSE 0 END)
+                       AS high_count,
                    SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END)
                        AS critical_count
             FROM '{path}'
@@ -654,6 +660,12 @@ def get_clusters(dataset: str = DEFAULT_DATASET):
                    COUNT(*) AS alert_count,
                    ROUND(MAX(anomaly_score), 4) AS max_score,
                    ROUND(AVG(anomaly_score), 4) AS avg_score,
+                   SUM(CASE WHEN severity = 'LOW' THEN 1 ELSE 0 END)
+                       AS low_count,
+                   SUM(CASE WHEN severity = 'MEDIUM' THEN 1 ELSE 0 END)
+                       AS medium_count,
+                   SUM(CASE WHEN severity = 'HIGH' THEN 1 ELSE 0 END)
+                       AS high_count,
                    SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END)
                        AS critical_count
             FROM '{alerts}'

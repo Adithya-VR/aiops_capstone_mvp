@@ -11,6 +11,20 @@ import streamlit as st
 API_BASE = os.getenv("AIOPS_API_BASE", "http://127.0.0.1:8000")
 PAGE_SIZE = 500
 
+SEVERITY_ICONS = {
+    "CRITICAL": "\U0001F534",
+    "HIGH": "\U0001F7E0",
+    "MEDIUM": "\U0001F7E1",
+    "LOW": "\U0001F7E2",
+}
+
+
+def severity_icon_from_counts(counts):
+    for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+        if int(counts.get(severity, 0) or 0) > 0:
+            return SEVERITY_ICONS[severity]
+    return SEVERITY_ICONS["LOW"]
+
 
 def unix_to_readable(ts):
     try:
@@ -130,17 +144,32 @@ thresh = st.sidebar.slider(
 )
 top_n = st.sidebar.slider("Top N Alerts", 5, 50, 20)
 
-t1, t2, t3, t4, t5 = st.tabs(
-    [
+sections = [
         "📊 Overview",
         "📋 Log Explorer",
         "📈 Anomaly Timeline",
         "🚨 Top Alerts",
         "🔔 Alert Clusters",
-    ]
+]
+section_labels = {
+    "\U0001F4CA Overview": "Overview",
+    "\U0001F4CB Log Explorer": "Log Explorer",
+    "\U0001F4C8 Anomaly Timeline": "Anomaly Timeline",
+    "\U0001F6A8 Top Alerts": "Top Alerts",
+    "\U0001F514 Alert Clusters": "Alert Clusters",
+}
+sections = list(section_labels.keys())
+active_section_label = st.segmented_control(
+    "Section",
+    sections,
+    default="\U0001F4CA Overview",
+    key=f"{DATASET}_active_section",
+    label_visibility="collapsed",
 )
+active_section = section_labels[active_section_label]
+st.divider()
 
-with t1:
+if active_section == "Overview":
     st.header("System Overview")
 
     c1, c2, c3, c4 = st.columns(4)
@@ -206,7 +235,7 @@ with t1:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-with t2:
+if active_section == "Log Explorer":
     st.header("Log Explorer")
 
     c1, c2, c3 = st.columns(3)
@@ -328,7 +357,7 @@ with t2:
         else:
             st.info("No predicted alert-window logs found.")
 
-with t3:
+if active_section == "Anomaly Timeline":
     st.header("Anomaly Timeline")
 
     timeline = scores.copy()
@@ -479,7 +508,7 @@ with t3:
             )
         st.plotly_chart(fig, use_container_width=True)
 
-with t4:
+if active_section == "Top Alerts":
     st.header("Top Anomalous Windows" if HAS_LABELS else "Top Predicted Alert Windows")
 
     anomalous_scores = scores[scores["predicted"] == 1]["anomaly_score"]
@@ -536,7 +565,7 @@ with t4:
             else:
                 st.caption("No log lines found for this window.")
 
-with t5:
+if active_section == "Alert Clusters":
     st.header("Alert Clusters")
 
     if alerts.empty:
@@ -647,6 +676,17 @@ with t5:
             icon = "🟡"
         else:
             icon = "🟢"  #Low
+        severity_counts = {
+            "CRITICAL": critical_count,
+            "HIGH": int(cluster.get("high_count", 0) or 0),
+            "MEDIUM": int(cluster.get("medium_count", 0) or 0),
+            "LOW": int(cluster.get("low_count", 0) or 0),
+        }
+        if not any(severity_counts.values()) and not minilm_clusters.empty:
+            severity_counts["LOW"] = alert_count
+        elif not any(severity_counts.values()):
+            severity_counts = sev_counts
+        icon = severity_icon_from_counts(severity_counts)
         title = (
             f"{icon} {'Cluster ' + str(cid) if cid >= 0 else 'Unique'} | "
             f"{alert_count} alerts | Max score: {worst:.3f} | {label[:70]}"
@@ -736,6 +776,15 @@ with t5:
             critical_count = int(cluster["critical_count"])
             worst = float(cluster["max_score"])
             icon = "🔴" if critical_count > 0 else "🟠"
+            severity_counts = {
+                "CRITICAL": critical_count,
+                "HIGH": int(cluster.get("high_count", 0) or 0),
+                "MEDIUM": int(cluster.get("medium_count", 0) or 0),
+                "LOW": int(cluster.get("low_count", 0) or 0),
+            }
+            if not any(severity_counts.values()):
+                severity_counts["LOW"] = alert_count
+            icon = severity_icon_from_counts(severity_counts)
 
             title = (
                 f"{icon} {'Cluster ' + str(cid) if cid >= 0 else 'Unique'} | "
