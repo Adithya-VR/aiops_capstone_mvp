@@ -31,29 +31,29 @@ app.add_middleware(
 )
 
 
-def query(sql: str) -> list:
+def query(sql: str, params: Optional[list] = None) -> list:
     con = duckdb.connect()
     try:
-        return con.execute(sql).df().to_dict(orient="records")
+        return con.execute(sql, params or []).df().to_dict(orient="records")
     finally:
         con.close()
 
 
-def scalar(sql: str):
-    rows = query(sql)
+def scalar(sql: str, params: Optional[list] = None):
+    rows = query(sql, params)
     if not rows:
         return None
     return next(iter(rows[0].values()))
-
-
-def sql_string(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
 
 
 def csv_values(value: Optional[str]) -> list[str]:
     if not value:
         return []
     return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def placeholders(values: list) -> str:
+    return ", ".join("?" for _ in values)
 
 
 def paths_for(dataset: str) -> dict:
@@ -164,18 +164,15 @@ def get_logs(
     parsed_cols = parquet_columns(paths, "parsed")
 
     where = ["1=1"]
+    params = []
     levels = csv_values(level)
     if levels:
-        where.append(
-            "level IN (" + ", ".join(sql_string(v) for v in levels) + ")"
-        )
+        where.append(f"level IN ({placeholders(levels)})")
+        params.extend(levels)
     source_files = csv_values(source_file)
     if source_files and "source_file" in parsed_cols:
-        where.append(
-            "source_file IN ("
-            + ", ".join(sql_string(v) for v in source_files)
-            + ")"
-        )
+        where.append(f"source_file IN ({placeholders(source_files)})")
+        params.extend(source_files)
     if anomaly_only:
         where.append("is_anomaly = 1")
     if normal_only:
@@ -201,8 +198,8 @@ def get_logs(
             )
         """)
     if search:
-        safe = search.replace("'", "''")
-        where.append(f"content ILIKE '%{safe}%'")
+        where.append("content ILIKE ?")
+        params.append(f"%{search}%")
 
     where_sql = " AND ".join(where)
     source_select = (
@@ -217,12 +214,12 @@ def get_logs(
         WHERE {where_sql}
         ORDER BY line_id
         LIMIT {int(limit)} OFFSET {int(offset)}
-    """)
+    """, params)
     total = scalar(f"""
         SELECT COUNT(*) AS total
         FROM '{parsed}' p
         WHERE {where_sql}
-    """)
+    """, params)
     return {"total": total, "limit": limit, "offset": offset, "data": rows}
 
 
@@ -453,8 +450,10 @@ def get_alerts(
     alerts = parquet(paths, "alerts")
 
     where = [f"anomaly_score >= {float(min_score)}"]
+    params = []
     if severity:
-        where.append(f"severity = {sql_string(severity.upper())}")
+        where.append("severity = ?")
+        params.append(severity.upper())
     where_sql = " AND ".join(where)
 
     rows = query(f"""
@@ -466,12 +465,12 @@ def get_alerts(
         WHERE {where_sql}
         ORDER BY anomaly_score DESC
         LIMIT {int(limit)} OFFSET {int(offset)}
-    """)
+    """, params)
     total = scalar(f"""
         SELECT COUNT(*) AS total
         FROM '{alerts}'
         WHERE {where_sql}
-    """)
+    """, params)
     return {"total": total, "data": rows}
 
 
@@ -540,30 +539,28 @@ def get_minilm_clusters(
     cid_col = "cluster_id_tfidf" if method == "tfidf" else "cluster_id_minilm"
     parsed_cols = parquet_columns(paths, "parsed")
     where = ["1=1"]
+    params = []
     if start is not None:
         where.append(f"window_end > {int(start)}")
     if end is not None:
         where.append(f"window_start < {int(end)}")
     severities = csv_values(severity)
     if severities:
-        where.append(
-            "severity IN ("
-            + ", ".join(sql_string(v.upper()) for v in severities)
-            + ")"
-        )
+        severity_values = [v.upper() for v in severities]
+        where.append(f"severity IN ({placeholders(severity_values)})")
+        params.extend(severity_values)
     source_files = csv_values(source_file)
     if source_files and "source_file" in parsed_cols:
         where.append(f"""
             EXISTS (
                 SELECT 1
                 FROM '{parsed}' p
-                WHERE p.source_file IN (
-                    {", ".join(sql_string(v) for v in source_files)}
-                )
+                WHERE p.source_file IN ({placeholders(source_files)})
                   AND p.timestamp >= window_start
                   AND p.timestamp <  window_end
             )
         """)
+        params.extend(source_files)
     where_sql = " AND ".join(where)
 
     rows = query(f"""
@@ -625,7 +622,7 @@ def get_minilm_clusters(
         FROM cluster_stats s
         LEFT JOIN representative r USING (cluster_id)
         ORDER BY s.alert_count DESC
-    """)
+    """, params)
     return {"total_clusters": len(rows), "data": rows}
 
 
@@ -648,30 +645,28 @@ def get_minilm_cluster_alerts(
     cid_col = "cluster_id_tfidf" if method == "tfidf" else "cluster_id_minilm"
     parsed_cols = parquet_columns(paths, "parsed")
     where = [f"{cid_col} = {int(cluster_id)}"]
+    params = []
     if start is not None:
         where.append(f"window_end > {int(start)}")
     if end is not None:
         where.append(f"window_start < {int(end)}")
     severities = csv_values(severity)
     if severities:
-        where.append(
-            "severity IN ("
-            + ", ".join(sql_string(v.upper()) for v in severities)
-            + ")"
-        )
+        severity_values = [v.upper() for v in severities]
+        where.append(f"severity IN ({placeholders(severity_values)})")
+        params.extend(severity_values)
     source_files = csv_values(source_file)
     if source_files and "source_file" in parsed_cols:
         where.append(f"""
             EXISTS (
                 SELECT 1
                 FROM '{parsed}' p
-                WHERE p.source_file IN (
-                    {", ".join(sql_string(v) for v in source_files)}
-                )
+                WHERE p.source_file IN ({placeholders(source_files)})
                   AND p.timestamp >= window_start
                   AND p.timestamp <  window_end
             )
         """)
+        params.extend(source_files)
     where_sql = " AND ".join(where)
 
     rows = query(f"""
@@ -711,7 +706,7 @@ def get_minilm_cluster_alerts(
         FROM selected a
         LEFT JOIN representative r USING (alert_id)
         ORDER BY a.anomaly_score DESC
-    """)
+    """, params)
     return {"total": len(rows), "data": rows}
 
 
@@ -867,7 +862,8 @@ def get_clustering_comparison(dataset: str = DEFAULT_DATASET):
     return {
         "tfidf": {
             "method": "TF-IDF + DBSCAN",
-            "eps": 0.5,
+            "eps": data.get("tfidf_eps", 0.5),
+            "min_samples": data.get("min_samples", 2),
             "clusters": data.get("tfidf_clusters"),
             "unique": data.get("tfidf_unique"),
             "silhouette": data.get("tfidf_silhouette"),
@@ -881,7 +877,8 @@ def get_clustering_comparison(dataset: str = DEFAULT_DATASET):
         },
         "minilm": {
             "method": "MiniLM + DBSCAN",
-            "eps": 0.4,
+            "eps": data.get("minilm_eps", 0.4),
+            "min_samples": data.get("min_samples", 2),
             "clusters": data.get("minilm_clusters"),
             "unique": data.get("minilm_unique"),
             "silhouette": data.get("minilm_silhouette"),

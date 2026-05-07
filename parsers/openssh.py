@@ -2,6 +2,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from dataset_config import project_path
+
 
 DATASET_NAME = "openssh"
 WINDOW_SECS = 300
@@ -46,7 +48,7 @@ def get_source_path() -> Path | None:
 
 
 def get_source_paths() -> list[Path]:
-    data_dir = Path("data/OpenSSH")
+    data_dir = project_path("data/OpenSSH")
     if not data_dir.exists():
         return []
 

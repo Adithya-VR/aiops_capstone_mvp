@@ -1,13 +1,20 @@
 from pathlib import Path
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def project_path(path: str) -> Path:
+    return PROJECT_ROOT / path
+
+
 DATASETS = {
     "bgl": {
         "name": "bgl",
         "display_name": "BGL",
         "description": "BlueGene/L supercomputer logs",
-        "raw_path": Path("data/BGL.log"),
-        "output_dir": Path("output/bgl"),
+        "raw_path": project_path("data/BGL.log"),
+        "output_dir": project_path("output/bgl"),
         "parser": "bgl",
         "has_labels": True,
         "evaluation_mode": "supervised",
@@ -19,8 +26,8 @@ DATASETS = {
         "name": "openssh",
         "display_name": "OpenSSH",
         "description": "OpenSSH authentication logs",
-        "raw_path": Path("data/OpenSSH/SSH.log"),
-        "output_dir": Path("output/openssh"),
+        "raw_path": project_path("data/OpenSSH/SSH.log"),
+        "output_dir": project_path("output/openssh"),
         "parser": "openssh",
         "has_labels": False,
         "evaluation_mode": "unlabeled",
