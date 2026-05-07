@@ -41,17 +41,16 @@ MONTH_MAP = {
 
 
 def get_source_path() -> Path | None:
+    paths = get_source_paths()
+    return paths[0] if paths else None
+
+
+def get_source_paths() -> list[Path]:
     data_dir = Path("data/OpenSSH")
     if not data_dir.exists():
-        return None
+        return []
 
-    for name in ["SSH.log", "OpenSSH_2k.log", "openssh.log"]:
-        path = data_dir / name
-        if path.exists():
-            return path
-
-    files = list(data_dir.glob("*.log"))
-    return files[0] if files else None
+    return sorted(data_dir.glob("*.log"))
 
 
 def reset_parser_state() -> None:
@@ -64,7 +63,7 @@ def _parse_time(month: str, day: str, time_str: str) -> int:
     global _current_year, _previous_month
 
     try:
-        month_num = MONTH_MAP.get(month, 1)
+        month_num = MONTH_MAP[month]
         if _previous_month is not None and month_num < _previous_month:
             _current_year += 1
         _previous_month = month_num
@@ -80,7 +79,7 @@ def _parse_time(month: str, day: str, time_str: str) -> int:
         )
         return int(dt.timestamp())
     except Exception:
-        return 0
+        return None
 
 
 def _is_anomaly(_content: str) -> int:

@@ -154,36 +154,57 @@ def has_current_window_features(path: Path) -> bool:
 
 def parse_with_dataset_parser() -> tuple[pd.DataFrame, int]:
     parser_module = import_module(f"parsers.{CFG['parser']}")
-    source_path = parser_module.get_source_path() or RAW_LOG
+    if hasattr(parser_module, "get_source_paths"):
+        source_paths = list(parser_module.get_source_paths())
+    else:
+        source_path = parser_module.get_source_path() or RAW_LOG
+        source_paths = [source_path]
+
+    source_paths = [path for path in source_paths if path is not None]
+    if not source_paths:
+        source_paths = [RAW_LOG]
+
     if hasattr(parser_module, "reset_parser_state"):
         parser_module.reset_parser_state()
 
     miner = TemplateMiner()
     records = []
     skipped = 0
+    line_id = 0
 
-    if not source_path.exists():
-        print(f"ERROR: source log not found for dataset {DATASET}")
+    missing = [path for path in source_paths if not path.exists()]
+    if missing:
+        print(f"ERROR: source log not found for dataset {DATASET}: {missing[0]}")
         raise SystemExit(1)
 
-    with open(source_path, encoding="utf-8", errors="replace") as f:
-        for i, line in enumerate(f):
-            line = line.strip()
-            if not line:
-                continue
+    print(f"  Source files: {len(source_paths)}")
+    for source_path in source_paths:
+        print(f"    - {source_path}")
 
-            record = parser_module.parse_line(line, i)
-            if record is None:
-                skipped += 1
-                continue
+    for source_path in source_paths:
+        with open(source_path, encoding="utf-8", errors="replace") as f:
+            for source_line_id, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
 
-            result = miner.add_log_message(record["content"])
-            record["event_id"] = result["cluster_id"]
-            record["template"] = result["template_mined"]
-            records.append(record)
+                record = parser_module.parse_line(line, line_id)
+                if record is None or record.get("timestamp") is None:
+                    skipped += 1
+                    line_id += 1
+                    continue
 
-            if i % 50000 == 0 and i > 0:
-                print(f"  Processed {i:,} lines...")
+                record["line_id"] = line_id
+                record["source_file"] = str(source_path)
+                record["source_line_id"] = source_line_id
+                result = miner.add_log_message(record["content"])
+                record["event_id"] = result["cluster_id"]
+                record["template"] = result["template_mined"]
+                records.append(record)
+
+                line_id += 1
+                if line_id % 50000 == 0:
+                    print(f"  Processed {line_id:,} lines...")
 
     return pd.DataFrame(records), skipped
 

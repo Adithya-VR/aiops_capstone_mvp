@@ -36,6 +36,26 @@ def get_source_path() -> Path | None:
     return path if path.exists() else None
 
 
+def get_source_paths() -> list[Path]:
+    paths = []
+    primary = get_source_path()
+    if primary:
+        paths.append(primary)
+
+    data_dir = Path("data/BGL")
+    if data_dir.exists():
+        paths.extend(sorted(data_dir.glob("*.log")))
+
+    seen = set()
+    unique_paths = []
+    for path in paths:
+        resolved = path.resolve()
+        if resolved not in seen:
+            unique_paths.append(path)
+            seen.add(resolved)
+    return unique_paths
+
+
 def reset_parser_state() -> None:
     return None
 
