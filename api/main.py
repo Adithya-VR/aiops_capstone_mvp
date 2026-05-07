@@ -74,38 +74,10 @@ def require_file(paths: dict, key: str, message: str) -> Optional[dict]:
     return None
 
 
-def representative_log(paths: dict, window_start, window_end, template=None):
-    parsed = parquet(paths, "parsed")
-    template_filter = ""
-    if template:
-        template_filter = f"AND template = {sql_string(str(template))}"
-
-    rows = query(f"""
-        SELECT content, level, COUNT(*) AS count
-        FROM '{parsed}'
-        WHERE timestamp >= {int(window_start)}
-          AND timestamp <  {int(window_end)}
-          {template_filter}
-        GROUP BY content, level
-        ORDER BY count DESC
-        LIMIT 1
-    """)
-
-    if not rows and template:
-        rows = query(f"""
-            SELECT content, level, COUNT(*) AS count
-            FROM '{parsed}'
-            WHERE timestamp >= {int(window_start)}
-              AND timestamp <  {int(window_end)}
-              AND level IN ('FATAL', 'SEVERE', 'ERROR', 'FAILURE')
-            GROUP BY content, level
-            ORDER BY count DESC
-            LIMIT 1
-        """)
-
-    if not rows:
-        return {"content": str(template or "unknown"), "level": "UNKNOWN"}
-    return {"content": rows[0]["content"], "level": rows[0]["level"]}
+def parquet_columns(paths: dict, key: str) -> set[str]:
+    path = parquet(paths, key)
+    rows = query(f"DESCRIBE SELECT * FROM '{path}'")
+    return {row["column_name"] for row in rows}
 
 
 @app.get("/", tags=["Health"])
@@ -176,6 +148,7 @@ def get_logs(
     normal_only: bool = Query(False),
     predicted_only: bool = Query(False),
     non_predicted_only: bool = Query(False),
+    source_file: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -188,12 +161,20 @@ def get_logs(
             return err
     parsed = parquet(paths, "parsed")
     scores = parquet(paths, "scores")
+    parsed_cols = parquet_columns(paths, "parsed")
 
     where = ["1=1"]
     levels = csv_values(level)
     if levels:
         where.append(
             "level IN (" + ", ".join(sql_string(v) for v in levels) + ")"
+        )
+    source_files = csv_values(source_file)
+    if source_files and "source_file" in parsed_cols:
+        where.append(
+            "source_file IN ("
+            + ", ".join(sql_string(v) for v in source_files)
+            + ")"
         )
     if anomaly_only:
         where.append("is_anomaly = 1")
@@ -224,8 +205,13 @@ def get_logs(
         where.append(f"content ILIKE '%{safe}%'")
 
     where_sql = " AND ".join(where)
+    source_select = (
+        "source_file, source_line_id,"
+        if "source_file" in parsed_cols and "source_line_id" in parsed_cols
+        else "'' AS source_file, NULL AS source_line_id,"
+    )
     rows = query(f"""
-        SELECT line_id, timestamp, date, node, level,
+        SELECT line_id, {source_select} timestamp, date, node, level,
                is_anomaly, template, content
         FROM '{parsed}' p
         WHERE {where_sql}
@@ -238,6 +224,24 @@ def get_logs(
         WHERE {where_sql}
     """)
     return {"total": total, "limit": limit, "offset": offset, "data": rows}
+
+
+@app.get("/source-files", tags=["Logs"])
+@app.get("/datasets/{dataset}/source-files", tags=["Logs"])
+def get_source_files(dataset: str = DEFAULT_DATASET):
+    paths = paths_for(dataset)
+    if err := require_file(paths, "parsed", "Run pipeline.py first"):
+        return err
+    parsed = parquet(paths, "parsed")
+    if "source_file" not in parquet_columns(paths, "parsed"):
+        return {"data": [], "count": 0}
+    rows = query(f"""
+        SELECT source_file, COUNT(*) AS count
+        FROM '{parsed}'
+        GROUP BY source_file
+        ORDER BY source_file
+    """)
+    return {"data": rows, "count": len(rows)}
 
 
 @app.get("/levels", tags=["Overview"])
@@ -526,6 +530,7 @@ def get_minilm_clusters(
     start: Optional[int] = Query(None, ge=0),
     end: Optional[int] = Query(None, ge=0),
     severity: Optional[str] = Query(None),
+    source_file: Optional[str] = Query(None),
 ):
     paths = paths_for(dataset)
     if err := require_file(paths, "alerts_minilm", "Run alerts_minilm.py first"):
@@ -533,6 +538,7 @@ def get_minilm_clusters(
     path = parquet(paths, "alerts_minilm")
     parsed = parquet(paths, "parsed")
     cid_col = "cluster_id_tfidf" if method == "tfidf" else "cluster_id_minilm"
+    parsed_cols = parquet_columns(paths, "parsed")
     where = ["1=1"]
     if start is not None:
         where.append(f"window_end > {int(start)}")
@@ -545,6 +551,19 @@ def get_minilm_clusters(
             + ", ".join(sql_string(v.upper()) for v in severities)
             + ")"
         )
+    source_files = csv_values(source_file)
+    if source_files and "source_file" in parsed_cols:
+        where.append(f"""
+            EXISTS (
+                SELECT 1
+                FROM '{parsed}' p
+                WHERE p.source_file IN (
+                    {", ".join(sql_string(v) for v in source_files)}
+                )
+                  AND p.timestamp >= window_start
+                  AND p.timestamp <  window_end
+            )
+        """)
     where_sql = " AND ".join(where)
 
     rows = query(f"""
@@ -619,6 +638,7 @@ def get_minilm_cluster_alerts(
     start: Optional[int] = Query(None, ge=0),
     end: Optional[int] = Query(None, ge=0),
     severity: Optional[str] = Query(None),
+    source_file: Optional[str] = Query(None),
 ):
     paths = paths_for(dataset)
     if err := require_file(paths, "alerts_minilm", "Run alerts_minilm.py first"):
@@ -626,6 +646,7 @@ def get_minilm_cluster_alerts(
     path = parquet(paths, "alerts_minilm")
     parsed = parquet(paths, "parsed")
     cid_col = "cluster_id_tfidf" if method == "tfidf" else "cluster_id_minilm"
+    parsed_cols = parquet_columns(paths, "parsed")
     where = [f"{cid_col} = {int(cluster_id)}"]
     if start is not None:
         where.append(f"window_end > {int(start)}")
@@ -638,6 +659,19 @@ def get_minilm_cluster_alerts(
             + ", ".join(sql_string(v.upper()) for v in severities)
             + ")"
         )
+    source_files = csv_values(source_file)
+    if source_files and "source_file" in parsed_cols:
+        where.append(f"""
+            EXISTS (
+                SELECT 1
+                FROM '{parsed}' p
+                WHERE p.source_file IN (
+                    {", ".join(sql_string(v) for v in source_files)}
+                )
+                  AND p.timestamp >= window_start
+                  AND p.timestamp <  window_end
+            )
+        """)
     where_sql = " AND ".join(where)
 
     rows = query(f"""
@@ -808,8 +842,8 @@ def get_cluster_alerts(
 @app.get("/datasets/{dataset}/metrics", tags=["Evaluation"])
 def get_metrics(dataset: str = DEFAULT_DATASET):
     paths = paths_for(dataset)
-    if not paths["metrics"].exists():
-        return {"error": "Run pipeline.py to generate metrics.json"}
+    if err := require_file(paths, "metrics", "Run pipeline.py to generate metrics.json"):
+        return err
     return json.loads(paths["metrics"].read_text(encoding="utf-8"))
 
 
@@ -817,8 +851,12 @@ def get_metrics(dataset: str = DEFAULT_DATASET):
 @app.get("/datasets/{dataset}/clustering/comparison", tags=["Evaluation"])
 def get_clustering_comparison(dataset: str = DEFAULT_DATASET):
     paths = paths_for(dataset)
-    if not paths["clustering_comparison"].exists():
-        return {"error": "Run alerts_minilm.py to generate comparison"}
+    if err := require_file(
+        paths,
+        "clustering_comparison",
+        "Run alerts_minilm.py to generate comparison",
+    ):
+        return err
 
     data = json.loads(
         paths["clustering_comparison"].read_text(encoding="utf-8")

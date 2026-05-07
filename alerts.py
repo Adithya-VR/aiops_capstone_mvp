@@ -4,6 +4,7 @@ import duckdb
 import argparse
 from pathlib import Path
 from sklearn.cluster import DBSCAN
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 from dataset_config import DEFAULT_DATASET, dataset_paths, get_dataset
 
@@ -102,8 +103,6 @@ print(f"  LOW  : {(alert_df['severity']=='LOW').sum()}")
 # Convert templates to TF-IDF style vectors then cluster with DBSCAN
 # No heavy models needed — just token overlap similarity
 print("\nClustering alerts by template similarity...")
-
-from sklearn.feature_extraction.text import TfidfVectorizer
 
 templates = alert_df["top_template"].fillna("unknown").tolist()
 

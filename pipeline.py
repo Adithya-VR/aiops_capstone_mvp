@@ -436,16 +436,20 @@ else:
     feat["anomaly_score"] = -model.score_samples(X_scaled)
     feat["predicted"] = (model.predict(X_scaled) == -1).astype(int)
 
+    post_filter = CFG.get("post_filter", "evidence")
     score_p95 = float(feat["anomaly_score"].quantile(0.95))
-    confirmed = (
-        (feat["predicted"] == 1)
-        & (
-            (feat.get("fatal_count", 0) > 0)
-            | (feat.get("severe_count", 0) > 0)
-            | (feat["error_ratio"] > 0)
-            | (feat["anomaly_score"] >= score_p95)
-        )
-    ).astype(int)
+    if post_filter == "predicted_only":
+        confirmed = feat["predicted"].astype(int)
+    else:
+        confirmed = (
+            (feat["predicted"] == 1)
+            & (
+                (feat.get("fatal_count", 0) > 0)
+                | (feat.get("severe_count", 0) > 0)
+                | (feat["error_ratio"] > 0)
+                | (feat["anomaly_score"] >= score_p95)
+            )
+        ).astype(int)
 
     if HAS_LABELS:
         y_raw = feat["is_anomaly"].values
@@ -471,7 +475,9 @@ else:
             print("\n  Post-processing hurt F1 - keeping raw predictions")
     else:
         feat["predicted"] = confirmed
-        print("\n  Unlabeled dataset: applied evidence-based post-processing.")
+        print(f"\n  Unlabeled dataset post-filter: {post_filter}")
+        if CFG.get("post_filter_note"):
+            print(f"  Note: {CFG['post_filter_note']}")
 
     feat.to_parquet(SCORES, engine="pyarrow", index=False)
     metrics = write_metrics(feat)
