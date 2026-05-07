@@ -286,6 +286,33 @@ def get_level_anomaly_distribution(dataset: str = DEFAULT_DATASET):
     return {"data": rows}
 
 
+@app.get("/levels/predicted-window-distribution", tags=["Overview"])
+@app.get("/datasets/{dataset}/levels/predicted-window-distribution", tags=["Overview"])
+def get_level_predicted_window_distribution(dataset: str = DEFAULT_DATASET):
+    paths = paths_for(dataset)
+    if err := require_file(paths, "parsed", "Run pipeline.py first"):
+        return err
+    if err := require_file(paths, "scores", "Run pipeline.py first"):
+        return err
+    parsed = parquet(paths, "parsed")
+    scores = parquet(paths, "scores")
+    rows = query(f"""
+        SELECT p.level, COUNT(*) AS count
+        FROM '{parsed}' p
+        WHERE EXISTS (
+            SELECT 1
+            FROM '{scores}' s
+            WHERE s.predicted = 1
+              AND p.timestamp >= s.window_start
+              AND p.timestamp < s.window_end
+        )
+        GROUP BY p.level
+        ORDER BY count DESC
+    """)
+    total = int(sum(int(row["count"]) for row in rows))
+    return {"total": total, "data": rows}
+
+
 @app.get("/templates/top", tags=["Overview"])
 @app.get("/datasets/{dataset}/templates/top", tags=["Overview"])
 def get_top_templates(
