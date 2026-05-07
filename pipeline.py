@@ -152,76 +152,6 @@ def has_current_window_features(path: Path) -> bool:
     return bool((span == WINDOW).all() and (sample["step_size_sec"] == STEP).all())
 
 
-def parse_bgl() -> tuple[pd.DataFrame, int]:
-    bgl_re_full = re.compile(
-        r"^(?P<label>\S+)\s+"
-        r"(?P<timestamp>\d+)\s+"
-        r"(?P<date>\S+)\s+"
-        r"(?P<node>\S+)\s+"
-        r"(?P<time>\S+)\s+"
-        r"(?P<node2>\S+)\s+"
-        r"(?P<type>\S+)\s+"
-        r"(?P<component>\S+)\s+"
-        r"(?P<level>INFO|WARN|WARNING|ERROR|FATAL|SEVERE|FAILURE|CRITICAL)"
-        r"(?:\s+(?P<content>.*))?$"
-    )
-    bgl_re_short = re.compile(
-        r"^(?P<label>\S+)\s+"
-        r"(?P<timestamp>\d+)\s+"
-        r"(?P<date>\S+)\s+"
-        r"-\s+"
-        r"(?P<time>\S+)\s+"
-        r"(?P<type>\S+)\s+"
-        r"(?P<component>\S+)\s+"
-        r"(?P<level>INFO|WARN|WARNING|ERROR|FATAL|SEVERE|FAILURE|CRITICAL)"
-        r"(?:\s+(?P<content>.*))?$"
-    )
-
-    miner = TemplateMiner()
-    records = []
-    skipped = 0
-
-    with open(RAW_LOG, encoding="utf-8", errors="replace") as f:
-        for i, line in enumerate(f):
-            line = line.strip()
-            if not line:
-                continue
-
-            match = bgl_re_full.match(line)
-            fmt = "full"
-            if not match:
-                match = bgl_re_short.match(line)
-                fmt = "short"
-            if not match:
-                skipped += 1
-                continue
-
-            data = match.groupdict()
-            node = data.get("node", "-")
-            if node == "-" or fmt == "short":
-                node = "SYSTEM"
-
-            content = (data.get("content") or "").strip() or "<EMPTY>"
-            result = miner.add_log_message(content)
-            records.append({
-                "line_id": i,
-                "is_anomaly": int(data["label"] != "-"),
-                "timestamp": int(data["timestamp"]),
-                "date": data["date"],
-                "node": node,
-                "level": data["level"],
-                "component": data["component"],
-                "content": content,
-                "event_id": result["cluster_id"],
-                "template": result["template_mined"],
-            })
-
-            if i % 50000 == 0 and i > 0:
-                print(f"  Processed {i:,} lines...")
-
-    return pd.DataFrame(records), skipped
-
-
 def parse_with_dataset_parser() -> tuple[pd.DataFrame, int]:
     parser_module = import_module(f"parsers.{CFG['parser']}")
     source_path = parser_module.get_source_path() or RAW_LOG
@@ -258,11 +188,6 @@ def parse_with_dataset_parser() -> tuple[pd.DataFrame, int]:
     return pd.DataFrame(records), skipped
 
 
-if CFG["parser"] == "bgl" and not RAW_LOG.exists():
-    print(f"ERROR: source log not found: {RAW_LOG}")
-    raise SystemExit(1)
-
-
 print("\n" + "=" * 50)
 print(f"STEP 1/3: Parsing {DATASET} logs with Drain3...")
 print("=" * 50)
@@ -271,10 +196,7 @@ if PARSED.exists():
     print("  parsed.parquet already exists - skipping.")
     print(f"  Delete {PARSED} to re-run.\n")
 else:
-    if CFG["parser"] == "bgl":
-        parsed, skipped = parse_bgl()
-    else:
-        parsed, skipped = parse_with_dataset_parser()
+    parsed, skipped = parse_with_dataset_parser()
 
     parsed.to_parquet(PARSED, engine="pyarrow", index=False)
     print(f"\n  Total parsed    : {len(parsed):,}")

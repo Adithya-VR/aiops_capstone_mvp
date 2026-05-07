@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import plotly.express as px
@@ -10,6 +10,37 @@ import streamlit as st
 
 API_BASE = os.getenv("AIOPS_API_BASE", "http://127.0.0.1:8000")
 PAGE_SIZE = 500
+
+SEVERITY_ICONS = {
+    "CRITICAL": "\U0001F534",
+    "HIGH": "\U0001F7E0",
+    "MEDIUM": "\U0001F7E1",
+    "LOW": "\U0001F7E2",
+}
+
+
+def severity_icon_from_counts(counts):
+    for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+        if int(counts.get(severity, 0) or 0) > 0:
+            return SEVERITY_ICONS[severity]
+    return SEVERITY_ICONS["LOW"]
+
+
+def column_sum(df, column):
+    return int(df[column].sum()) if column in df.columns else 0
+
+
+def utc_day_bounds(selected_dates):
+    if not isinstance(selected_dates, (list, tuple)) or len(selected_dates) != 2:
+        return None, None
+    start_date, end_date = selected_dates
+    start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    end_dt = datetime.combine(
+        end_date + timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=timezone.utc,
+    )
+    return int(start_dt.timestamp()), int(end_dt.timestamp())
 
 
 def unix_to_readable(ts):
@@ -130,17 +161,32 @@ thresh = st.sidebar.slider(
 )
 top_n = st.sidebar.slider("Top N Alerts", 5, 50, 20)
 
-t1, t2, t3, t4, t5 = st.tabs(
-    [
+sections = [
         "📊 Overview",
         "📋 Log Explorer",
         "📈 Anomaly Timeline",
         "🚨 Top Alerts",
         "🔔 Alert Clusters",
-    ]
+]
+section_labels = {
+    "\U0001F4CA Overview": "Overview",
+    "\U0001F4CB Log Explorer": "Log Explorer",
+    "\U0001F4C8 Anomaly Timeline": "Anomaly Timeline",
+    "\U0001F6A8 Top Alerts": "Top Alerts",
+    "\U0001F514 Alert Clusters": "Alert Clusters",
+}
+sections = list(section_labels.keys())
+active_section_label = st.segmented_control(
+    "Section",
+    sections,
+    default="\U0001F4CA Overview",
+    key=f"{DATASET}_active_section",
+    label_visibility="collapsed",
 )
+active_section = section_labels[active_section_label]
+st.divider()
 
-with t1:
+if active_section == "Overview":
     st.header("System Overview")
 
     c1, c2, c3, c4 = st.columns(4)
@@ -206,7 +252,7 @@ with t1:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-with t2:
+if active_section == "Log Explorer":
     st.header("Log Explorer")
 
     c1, c2, c3 = st.columns(3)
@@ -328,7 +374,7 @@ with t2:
         else:
             st.info("No predicted alert-window logs found.")
 
-with t3:
+if active_section == "Anomaly Timeline":
     st.header("Anomaly Timeline")
 
     timeline = scores.copy()
@@ -479,7 +525,7 @@ with t3:
             )
         st.plotly_chart(fig, use_container_width=True)
 
-with t4:
+if active_section == "Top Alerts":
     st.header("Top Anomalous Windows" if HAS_LABELS else "Top Predicted Alert Windows")
 
     anomalous_scores = scores[scores["predicted"] == 1]["anomaly_score"]
@@ -536,34 +582,85 @@ with t4:
             else:
                 st.caption("No log lines found for this window.")
 
-with t5:
+if active_section == "Alert Clusters":
     st.header("Alert Clusters")
 
     if alerts.empty:
         st.warning("Run `python alerts.py` first to generate clusters.")
         st.stop()
 
+    score_dates = pd.to_datetime(scores["window_start"], unit="s", utc=True)
+    min_date = score_dates.min().date()
+    max_date = score_dates.max().date()
+    f1, f2 = st.columns([2, 3])
+    with f1:
+        selected_dates = st.date_input(
+            "Alert date range",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date,
+            key=f"{DATASET}_cluster_date_range",
+        )
+    with f2:
+        selected_severities = st.multiselect(
+            "Alert severity",
+            ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+            default=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+            key=f"{DATASET}_cluster_severity_filter",
+        )
+
+    start_ts, end_ts = utc_day_bounds(selected_dates)
+    cluster_params = {}
+    if start_ts is not None and end_ts is not None:
+        cluster_params["start"] = start_ts
+        cluster_params["end"] = end_ts
+    if not selected_severities:
+        cluster_params["severity"] = "__NONE__"
+    elif len(selected_severities) < 4:
+        cluster_params["severity"] = ",".join(selected_severities)
+
     try:
         comp = dataset_get(DATASET, "/clustering/comparison")
         minilm_clusters = dataset_frame(
             DATASET,
             "/alerts/minilm/clusters",
-            {"method": "minilm"},
+            {"method": "minilm", **cluster_params},
         )
         cluster_method = "MiniLM + DBSCAN"
-        n_clusters = int(comp["minilm"]["clusters"])
-        n_unique = int(comp["minilm"]["unique"])
-        noise_reduction = float(comp["minilm"]["noise_reduction"])
+        minilm_available = True
+        filtered_alerts = (
+            int(minilm_clusters["alert_count"].sum())
+            if "alert_count" in minilm_clusters.columns
+            else 0
+        )
+        n_clusters = (
+            int((minilm_clusters["cluster_id"] >= 0).sum())
+            if "cluster_id" in minilm_clusters.columns
+            else 0
+        )
+        n_unique = (
+            int((minilm_clusters["cluster_id"] < 0).sum())
+            if "cluster_id" in minilm_clusters.columns
+            else 0
+        )
+        groups = n_clusters + n_unique
+        noise_reduction = (
+            round((1 - groups / filtered_alerts) * 100, 1)
+            if filtered_alerts > 0
+            else 0.0
+        )
     except Exception:
         comp = None
         minilm_clusters = pd.DataFrame()
+        minilm_available = False
         cluster_method = "TF-IDF + DBSCAN"
+        filtered_alerts = int(alert_summary["total_alerts"])
         n_clusters = int(alert_summary["clusters"])
         n_unique = int(alert_summary["unique_alerts"])
         noise_reduction = float(alert_summary["noise_reduction_pct"])
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Alerts", f"{int(alert_summary['total_alerts']):,}")
+    c1.metric("Filtered Alerts", f"{filtered_alerts:,}")
     c2.metric("Clusters Found", f"{n_clusters}")
     c3.metric("Unique Alerts", f"{n_unique}")
     c4.metric("Noise Reduced", f"{noise_reduction:.1f}%")
@@ -573,56 +670,87 @@ with t5:
 
     with col1:
         st.subheader("Alerts by Severity")
-        sev = alerts["severity"].value_counts().reset_index()
-        sev.columns = ["severity", "count"]
-        fig = px.bar(
-            sev,
-            x="severity",
-            y="count",
-            color="severity",
-            color_discrete_map={
-                "CRITICAL": "#E24B4A",
-                "HIGH": "#EF9F27",
-                "MEDIUM": "#EDD94C",
-                "LOW": "#4CAF50",
-            },
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        if minilm_available:
+            sev = pd.DataFrame(
+                [
+                    {
+                        "severity": "LOW",
+                        "count": column_sum(minilm_clusters, "low_count"),
+                    },
+                    {
+                        "severity": "MEDIUM",
+                        "count": column_sum(minilm_clusters, "medium_count"),
+                    },
+                    {
+                        "severity": "HIGH",
+                        "count": column_sum(minilm_clusters, "high_count"),
+                    },
+                    {
+                        "severity": "CRITICAL",
+                        "count": column_sum(minilm_clusters, "critical_count"),
+                    },
+                ]
+            )
+        else:
+            sev = alerts["severity"].value_counts().reset_index()
+            sev.columns = ["severity", "count"]
+        if sev["count"].sum() > 0:
+            fig = px.bar(
+                sev,
+                x="severity",
+                y="count",
+                color="severity",
+                color_discrete_map={
+                    "CRITICAL": "#E24B4A",
+                    "HIGH": "#EF9F27",
+                    "MEDIUM": "#EDD94C",
+                    "LOW": "#4CAF50",
+                },
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No alerts match the selected filters.")
 
     with col2:
         st.subheader("Top 10 Clusters by Size")
-        if not minilm_clusters.empty:
+        if minilm_available:
             cluster_summary = minilm_clusters
         else:
             cluster_summary = dataset_frame(DATASET, "/clusters")
         top_clusters = cluster_summary.head(10).copy()
-        if "cluster_label" not in top_clusters.columns:
-            top_clusters["cluster_label"] = top_clusters["representative_content"]
-        top_clusters["label"] = top_clusters["representative_content"].str[:70]
-        fig = px.bar(
-            top_clusters,
-            x="alert_count",
-            y="label",
-            orientation="h",
-            color="max_score",
-            color_continuous_scale="Reds",
-            hover_data=[
-                "representative_level",
-                "critical_count",
-                "max_score",
-                "cluster_label",
-            ],
-            labels={"alert_count": "Alert Count", "label": "Representative Error"},
-        )
-        fig.update_layout(yaxis_title="", height=420)
-        st.plotly_chart(fig, use_container_width=True)
+        if not top_clusters.empty:
+            if "cluster_label" not in top_clusters.columns:
+                top_clusters["cluster_label"] = top_clusters["representative_content"]
+            top_clusters["label"] = top_clusters["representative_content"].str[:70]
+            fig = px.bar(
+                top_clusters,
+                x="alert_count",
+                y="label",
+                orientation="h",
+                color="max_score",
+                color_continuous_scale="Reds",
+                hover_data=[
+                    "representative_level",
+                    "critical_count",
+                    "max_score",
+                    "cluster_label",
+                ],
+                labels={"alert_count": "Alert Count", "label": "Representative Error"},
+            )
+            fig.update_layout(yaxis_title="", height=420)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No clusters match the selected filters.")
 
     st.divider()
     st.subheader(f"All Alert Clusters - {cluster_method}")
-    if not minilm_clusters.empty:
+    if minilm_available:
         cluster_summary = minilm_clusters
     else:
         cluster_summary = dataset_frame(DATASET, "/clusters")
+    if cluster_summary.empty or "cluster_id" not in cluster_summary.columns:
+        st.info("No alert clusters match the selected filters.")
+        cluster_summary = pd.DataFrame(columns=["cluster_id"])
     for _, cluster in cluster_summary.sort_values("cluster_id").iterrows():
         cid = int(cluster["cluster_id"])
         label = str(cluster["representative_content"])
@@ -633,11 +761,11 @@ with t5:
         # icon = "🔴" if critical_count > 0 else "🟠"
         cluster_alerts = (
             pd.DataFrame({"severity": []})
-            if not minilm_clusters.empty
+            if minilm_available
             else alerts[alerts["cluster_id"] == cid]
         )
         sev_counts = cluster_alerts["severity"].value_counts().to_dict()
-        if not minilm_clusters.empty and critical_count > 0:
+        if minilm_available and critical_count > 0:
             sev_counts["CRITICAL"] = critical_count
         if sev_counts.get("CRITICAL", 0) > 0:
             icon = "🔴"
@@ -647,6 +775,17 @@ with t5:
             icon = "🟡"
         else:
             icon = "🟢"  #Low
+        severity_counts = {
+            "CRITICAL": critical_count,
+            "HIGH": int(cluster.get("high_count", 0) or 0),
+            "MEDIUM": int(cluster.get("medium_count", 0) or 0),
+            "LOW": int(cluster.get("low_count", 0) or 0),
+        }
+        if not any(severity_counts.values()) and minilm_available:
+            severity_counts["LOW"] = alert_count
+        elif not any(severity_counts.values()):
+            severity_counts = sev_counts
+        icon = severity_icon_from_counts(severity_counts)
         title = (
             f"{icon} {'Cluster ' + str(cid) if cid >= 0 else 'Unique'} | "
             f"{alert_count} alerts | Max score: {worst:.3f} | {label[:70]}"
@@ -658,11 +797,11 @@ with t5:
             c2.metric("Max anomaly score", f"{worst:.3f}")
             c3.metric("Critical alerts", critical_count)
 
-            if not minilm_clusters.empty:
+            if minilm_available:
                 display = dataset_frame(
                     DATASET,
                     f"/alerts/minilm/clusters/{cid}",
-                    {"method": "minilm"},
+                    {"method": "minilm", **cluster_params},
                 )
             else:
                 display = dataset_frame(DATASET, f"/clusters/{cid}/alerts")
@@ -725,10 +864,13 @@ with t5:
         method_key = "minilm" if method == "MiniLM + DBSCAN" else "tfidf"
         comparison_clusters = dataset_frame(
             DATASET,
-            "/alerts/minilm/clusters", {"method": method_key}
+            "/alerts/minilm/clusters", {"method": method_key, **cluster_params}
         )
 
         st.subheader(f"Clusters - {method}")
+        if comparison_clusters.empty or "cluster_id" not in comparison_clusters.columns:
+            st.info("No clusters match the selected filters for this method.")
+            comparison_clusters = pd.DataFrame()
         for _, cluster in comparison_clusters.iterrows():
             cid = int(cluster["cluster_id"])
             label = str(cluster["representative_content"])
@@ -736,6 +878,15 @@ with t5:
             critical_count = int(cluster["critical_count"])
             worst = float(cluster["max_score"])
             icon = "🔴" if critical_count > 0 else "🟠"
+            severity_counts = {
+                "CRITICAL": critical_count,
+                "HIGH": int(cluster.get("high_count", 0) or 0),
+                "MEDIUM": int(cluster.get("medium_count", 0) or 0),
+                "LOW": int(cluster.get("low_count", 0) or 0),
+            }
+            if not any(severity_counts.values()):
+                severity_counts["LOW"] = alert_count
+            icon = severity_icon_from_counts(severity_counts)
 
             title = (
                 f"{icon} {'Cluster ' + str(cid) if cid >= 0 else 'Unique'} | "
@@ -748,7 +899,7 @@ with t5:
                 rows = dataset_frame(
                     DATASET,
                     f"/alerts/minilm/clusters/{cid}",
-                    {"method": method_key},
+                    {"method": method_key, **cluster_params},
                 )
                 rows["Time (UTC)"] = rows["window_start"].apply(unix_to_readable)
                 rows = rows.rename(

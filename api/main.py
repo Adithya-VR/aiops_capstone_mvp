@@ -523,6 +523,9 @@ def get_minilm_alerts(
 def get_minilm_clusters(
     dataset: str = DEFAULT_DATASET,
     method: str = Query("tfidf", pattern="^(tfidf|minilm)$"),
+    start: Optional[int] = Query(None, ge=0),
+    end: Optional[int] = Query(None, ge=0),
+    severity: Optional[str] = Query(None),
 ):
     paths = paths_for(dataset)
     if err := require_file(paths, "alerts_minilm", "Run alerts_minilm.py first"):
@@ -530,15 +533,39 @@ def get_minilm_clusters(
     path = parquet(paths, "alerts_minilm")
     parsed = parquet(paths, "parsed")
     cid_col = "cluster_id_tfidf" if method == "tfidf" else "cluster_id_minilm"
+    where = ["1=1"]
+    if start is not None:
+        where.append(f"window_end > {int(start)}")
+    if end is not None:
+        where.append(f"window_start < {int(end)}")
+    severities = csv_values(severity)
+    if severities:
+        where.append(
+            "severity IN ("
+            + ", ".join(sql_string(v.upper()) for v in severities)
+            + ")"
+        )
+    where_sql = " AND ".join(where)
 
     rows = query(f"""
-        WITH cluster_stats AS (
+        WITH filtered AS (
+            SELECT *
+            FROM '{path}'
+            WHERE {where_sql}
+        ),
+        cluster_stats AS (
             SELECT {cid_col} AS cluster_id,
                    COUNT(*) AS alert_count,
                    ROUND(MAX(anomaly_score), 4) AS max_score,
+                   SUM(CASE WHEN severity = 'LOW' THEN 1 ELSE 0 END)
+                       AS low_count,
+                   SUM(CASE WHEN severity = 'MEDIUM' THEN 1 ELSE 0 END)
+                       AS medium_count,
+                   SUM(CASE WHEN severity = 'HIGH' THEN 1 ELSE 0 END)
+                       AS high_count,
                    SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END)
                        AS critical_count
-            FROM '{path}'
+            FROM filtered
             GROUP BY {cid_col}
         ),
         top_alert AS (
@@ -548,7 +575,7 @@ def get_minilm_clusters(
                     PARTITION BY {cid_col}
                     ORDER BY anomaly_score DESC
                 ) AS rn
-                FROM '{path}'
+                FROM filtered
             )
             WHERE rn = 1
         ),
@@ -589,6 +616,9 @@ def get_minilm_cluster_alerts(
     cluster_id: int,
     dataset: str = DEFAULT_DATASET,
     method: str = Query("tfidf", pattern="^(tfidf|minilm)$"),
+    start: Optional[int] = Query(None, ge=0),
+    end: Optional[int] = Query(None, ge=0),
+    severity: Optional[str] = Query(None),
 ):
     paths = paths_for(dataset)
     if err := require_file(paths, "alerts_minilm", "Run alerts_minilm.py first"):
@@ -596,6 +626,19 @@ def get_minilm_cluster_alerts(
     path = parquet(paths, "alerts_minilm")
     parsed = parquet(paths, "parsed")
     cid_col = "cluster_id_tfidf" if method == "tfidf" else "cluster_id_minilm"
+    where = [f"{cid_col} = {int(cluster_id)}"]
+    if start is not None:
+        where.append(f"window_end > {int(start)}")
+    if end is not None:
+        where.append(f"window_start < {int(end)}")
+    severities = csv_values(severity)
+    if severities:
+        where.append(
+            "severity IN ("
+            + ", ".join(sql_string(v.upper()) for v in severities)
+            + ")"
+        )
+    where_sql = " AND ".join(where)
 
     rows = query(f"""
         WITH selected AS (
@@ -604,7 +647,7 @@ def get_minilm_cluster_alerts(
                    ROUND(anomaly_score, 6) AS anomaly_score,
                    severity, top_template, anomaly_count, total_logs
             FROM '{path}'
-            WHERE {cid_col} = {int(cluster_id)}
+            WHERE {where_sql}
         ),
         representative AS (
             SELECT *
@@ -654,6 +697,12 @@ def get_clusters(dataset: str = DEFAULT_DATASET):
                    COUNT(*) AS alert_count,
                    ROUND(MAX(anomaly_score), 4) AS max_score,
                    ROUND(AVG(anomaly_score), 4) AS avg_score,
+                   SUM(CASE WHEN severity = 'LOW' THEN 1 ELSE 0 END)
+                       AS low_count,
+                   SUM(CASE WHEN severity = 'MEDIUM' THEN 1 ELSE 0 END)
+                       AS medium_count,
+                   SUM(CASE WHEN severity = 'HIGH' THEN 1 ELSE 0 END)
+                       AS high_count,
                    SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END)
                        AS critical_count
             FROM '{alerts}'
