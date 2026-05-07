@@ -50,7 +50,7 @@ def unix_to_readable(ts):
         return str(ts)
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=200)
 def api_get(path, params=None):
     url = f"{API_BASE.rstrip('/')}{path}"
     response = requests.get(url, params=params or {}, timeout=60)
