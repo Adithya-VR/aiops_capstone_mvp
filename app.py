@@ -84,7 +84,8 @@ def load_required_data(dataset):
         scores = dataset_frame(dataset, "/scores/timeline")
         alerts = dataset_frame(dataset, "/alerts", {"limit": 5000})
         alert_summary = dataset_get(dataset, "/alerts/summary")
-        return stats, levels, scores, alerts, alert_summary
+        source_files = dataset_frame(dataset, "/source-files")
+        return stats, levels, scores, alerts, alert_summary, source_files
     except Exception as exc:
         st.error(f"Could not load data from FastAPI: {exc}")
         st.info(
@@ -129,7 +130,12 @@ DATASET = dataset_labels[selected_label]
 dataset_meta = next(d for d in ready_datasets if d["name"] == DATASET)
 HAS_LABELS = bool(dataset_meta.get("has_labels", True))
 
-stats, levels, scores, alerts, alert_summary = load_required_data(DATASET)
+stats, levels, scores, alerts, alert_summary, source_files = load_required_data(DATASET)
+source_file_options = (
+    source_files["source_file"].tolist()
+    if "source_file" in source_files.columns
+    else []
+)
 
 score_min = float(stats.get("score_min", scores["anomaly_score"].min()))
 score_max = float(stats.get("score_max", scores["anomaly_score"].max()))
@@ -255,7 +261,10 @@ if active_section == "Overview":
 if active_section == "Log Explorer":
     st.header("Log Explorer")
 
-    c1, c2, c3 = st.columns(3)
+    if source_file_options:
+        c1, c2, c3, c4 = st.columns(4)
+    else:
+        c1, c2, c3 = st.columns(3)
     show_options = (
         ["All", "Anomalies only", "Normal only"]
         if HAS_LABELS
@@ -264,8 +273,20 @@ if active_section == "Log Explorer":
     f_show = c1.selectbox("Show", show_options)
     f_level = c2.multiselect("Log Level", options=levels, default=levels)
     f_search = c3.text_input("Search in content", "")
+    if source_file_options:
+        f_source_files = c4.multiselect(
+            "Source File",
+            options=source_file_options,
+            default=source_file_options,
+            key=f"{DATASET}_log_source_files",
+        )
+    else:
+        f_source_files = []
 
-    filter_key = f"{f_show}_{','.join(f_level)}_{f_search}"
+    filter_key = (
+        f"{f_show}_{','.join(f_level)}_{f_search}_"
+        f"{','.join(f_source_files)}"
+    )
     if "last_log_filter" not in st.session_state:
         st.session_state.last_log_filter = filter_key
     if "log_page" not in st.session_state:
@@ -286,6 +307,10 @@ if active_section == "Log Explorer":
         "non_predicted_only": (not HAS_LABELS)
         and f_show == "Non-alert-window logs",
     }
+    if source_file_options:
+        params["source_file"] = (
+            ",".join(f_source_files) if f_source_files else "__NONE__"
+        )
     payload = dataset_get(DATASET, "/logs", params)
     total_rows = int(payload["total"])
     page_view = pd.DataFrame(payload["data"])
@@ -338,6 +363,8 @@ if active_section == "Log Explorer":
             "template",
             "content",
         ]
+        if source_file_options and "source_file" in page_view.columns:
+            display_cols.insert(2, "source_file")
         st.dataframe(
             page_view[display_cols].style.apply(highlight, axis=1),
             use_container_width=True,
@@ -592,7 +619,10 @@ if active_section == "Alert Clusters":
     score_dates = pd.to_datetime(scores["window_start"], unit="s", utc=True)
     min_date = score_dates.min().date()
     max_date = score_dates.max().date()
-    f1, f2 = st.columns([2, 3])
+    if source_file_options:
+        f1, f2, f3 = st.columns([2, 2, 2])
+    else:
+        f1, f2 = st.columns([2, 3])
     with f1:
         selected_dates = st.date_input(
             "Alert date range",
@@ -608,6 +638,16 @@ if active_section == "Alert Clusters":
             default=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
             key=f"{DATASET}_cluster_severity_filter",
         )
+    if source_file_options:
+        with f3:
+            selected_source_files = st.multiselect(
+                "Source File",
+                source_file_options,
+                default=source_file_options,
+                key=f"{DATASET}_cluster_source_files",
+            )
+    else:
+        selected_source_files = []
 
     start_ts, end_ts = utc_day_bounds(selected_dates)
     cluster_params = {}
@@ -618,6 +658,12 @@ if active_section == "Alert Clusters":
         cluster_params["severity"] = "__NONE__"
     elif len(selected_severities) < 4:
         cluster_params["severity"] = ",".join(selected_severities)
+    if source_file_options:
+        cluster_params["source_file"] = (
+            ",".join(selected_source_files)
+            if selected_source_files
+            else "__NONE__"
+        )
 
     try:
         comp = dataset_get(DATASET, "/clustering/comparison")
@@ -649,7 +695,8 @@ if active_section == "Alert Clusters":
             if filtered_alerts > 0
             else 0.0
         )
-    except Exception:
+    except Exception as exc:
+        st.warning(f"MiniLM clustering unavailable: {exc}")
         comp = None
         minilm_clusters = pd.DataFrame()
         minilm_available = False

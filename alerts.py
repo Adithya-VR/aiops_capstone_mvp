@@ -1,176 +1,121 @@
-import pandas as pd
-import numpy as np
-import duckdb
 import argparse
-from pathlib import Path
+
+import numpy as np
+import pandas as pd
 from sklearn.cluster import DBSCAN
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
+
+from alert_generation import generate_alerts
 from dataset_config import DEFAULT_DATASET, dataset_paths, get_dataset
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--dataset", default=DEFAULT_DATASET)
-args = parser.parse_args()
-CFG = get_dataset(args.dataset)
-PATHS = dataset_paths(args.dataset)
-HAS_LABELS = bool(CFG.get("has_labels", True))
+TFIDF_EPS = 0.5
+MIN_SAMPLES = 2
 
-SCORES  = PATHS["scores"]
-PARSED  = PATHS["parsed"]
-ALERTS  = PATHS["alerts"]
 
-print("Generating alerts from anomalous windows...")
+def assign_unique_noise_ids(labels):
+    labels = labels.copy()
+    noise_positions = np.where(labels == -1)[0]
+    for noise_number, row_index in enumerate(noise_positions, start=1):
+        labels[row_index] = -noise_number
+    return labels
 
-scores = pd.read_parquet(SCORES, engine="pyarrow")
-parsed = pd.read_parquet(PARSED, engine="pyarrow")
 
-# ── Step 1: Generate alerts from anomalous windows ────────────────
-# An alert = one anomalous window with its most common fatal template
-# p95 = scores["anomaly_score"].quantile(0.95)
-# p85 = scores["anomaly_score"].quantile(0.85)
-# p70 = scores["anomaly_score"].quantile(0.70)
+def cluster_labels(alert_df: pd.DataFrame) -> tuple[np.ndarray, int, int]:
+    templates = alert_df["top_template"].fillna("unknown").tolist()
+    vectorizer = TfidfVectorizer(
+        analyzer="word",
+        token_pattern=r"[a-zA-Z]+",
+        max_features=500,
+    )
+    x_tfidf = normalize(vectorizer.fit_transform(templates).toarray())
+    labels = DBSCAN(
+        eps=TFIDF_EPS,
+        min_samples=MIN_SAMPLES,
+        metric="cosine",
+    ).fit_predict(x_tfidf)
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    n_noise = int((labels == -1).sum())
+    return labels, n_clusters, n_noise
 
-# Compute percentiles from anomalous windows only
-# so severity levels distribute meaningfully across alerts
-p95 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.95)
-p85 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.85)
-p70 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.70)
 
-anomalous = scores[scores["predicted"] == 1].copy()
-print(f"  Anomalous windows: {len(anomalous):,}")
+def add_cluster_labels(alert_df: pd.DataFrame) -> pd.DataFrame:
+    cluster_labels_by_id = {}
+    for cid in set(alert_df["cluster_id"]):
+        if cid < 0:
+            continue
+        members = alert_df[alert_df["cluster_id"] == cid]
+        cluster_labels_by_id[cid] = members["top_template"].value_counts().index[0][:60]
 
-alerts = []
-for _, row in anomalous.iterrows():
-    # Get log lines in this window
-    window_logs = parsed[
-        (parsed["timestamp"] >= row["window_start"]) &
-        (parsed["timestamp"] <  row["window_end"])
-    ]
+    alert_df["cluster_label"] = alert_df.apply(
+        lambda row: (
+            f"Unique: {str(row['top_template'])[:40]}"
+            if row["cluster_id"] < 0
+            else cluster_labels_by_id.get(row["cluster_id"], "Unknown")
+        ),
+        axis=1,
+    )
+    return alert_df
 
-    # Labeled datasets use the true anomalous lines as representatives.
-    # Unlabeled datasets use all logs in the predicted alert window.
-    if HAS_LABELS:
-        representative_logs = window_logs[window_logs["is_anomaly"] == 1]
-        if representative_logs.empty:
-            representative_logs = window_logs
-    else:
-        representative_logs = window_logs
 
-    top_template = (representative_logs["template"]
-                    .value_counts().index[0]
-                    if len(representative_logs) > 0 else "unknown")
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default=DEFAULT_DATASET)
+    args = parser.parse_args()
 
-    top_level = (representative_logs["level"]
-                 .value_counts().index[0]
-                 if len(representative_logs) > 0 else "INFO")
+    cfg = get_dataset(args.dataset)
+    paths = dataset_paths(args.dataset)
+    has_labels = bool(cfg.get("has_labels", True))
 
-    # Assign severity based on score percentile
-    # if row["anomaly_score"] >= p95:
-    #     severity = "CRITICAL"
-    # elif row["anomaly_score"] >= p85:
-    #     severity = "HIGH"
-    # else:
-    #     severity = "MEDIUM"
+    print("Generating alerts from anomalous windows...")
+    scores = pd.read_parquet(paths["scores"], engine="pyarrow")
+    parsed = pd.read_parquet(paths["parsed"], engine="pyarrow")
+    alert_df = generate_alerts(scores, parsed, has_labels)
+    alert_df["cluster_id"] = -1
 
-    if row["anomaly_score"] >= p95:
-        severity = "CRITICAL"      # top 5%  — most dangerous
-    elif row["anomaly_score"] >= p85:
-        severity = "HIGH"          # next 10% — serious
-    elif row["anomaly_score"] >= p70:
-        severity = "MEDIUM"        # next 15% — moderate
-    else:
-        severity = "LOW"           # bottom 70% of anomalies — minor
+    print(f"  Alerts generated: {len(alert_df):,}")
+    if alert_df.empty:
+        alert_df["cluster_label"] = []
+        alert_df.to_parquet(paths["alerts"], engine="pyarrow", index=False)
+        print(f"\nAlerts saved -> {paths['alerts']}")
+        return
 
-    alerts.append({
-        "window_start":   row["window_start"],
-        "window_end":     row["window_end"],
-        "anomaly_score":  row["anomaly_score"],
-        "anomaly_count":  row["anomaly_count"],
-        "total_logs":     row["total_logs"],
-        "severity":       severity,
-        "top_template":   top_template,
-        "top_level":      top_level,
-        "cluster_id":     -1,   # filled in next step
-    })
+    print(f"  CRITICAL: {(alert_df['severity'] == 'CRITICAL').sum()}")
+    print(f"  HIGH    : {(alert_df['severity'] == 'HIGH').sum()}")
+    print(f"  MEDIUM  : {(alert_df['severity'] == 'MEDIUM').sum()}")
+    print(f"  LOW     : {(alert_df['severity'] == 'LOW').sum()}")
 
-alert_df = pd.DataFrame(alerts)
-print(f"  Alerts generated: {len(alert_df):,}")
-print(f"  CRITICAL: {(alert_df['severity']=='CRITICAL').sum()}")
-print(f"  HIGH    : {(alert_df['severity']=='HIGH').sum()}")
-print(f"  MEDIUM  : {(alert_df['severity']=='MEDIUM').sum()}")
-print(f"  LOW  : {(alert_df['severity']=='LOW').sum()}")
-# ── Step 2: Cluster alerts by template similarity ─────────────────
-# Convert templates to TF-IDF style vectors then cluster with DBSCAN
-# No heavy models needed — just token overlap similarity
-print("\nClustering alerts by template similarity...")
+    print("\nClustering alerts by template similarity...")
+    raw_labels, n_clusters, n_noise = cluster_labels(alert_df)
+    alert_df["cluster_id"] = assign_unique_noise_ids(raw_labels)
+    alert_df = add_cluster_labels(alert_df)
 
-from sklearn.feature_extraction.text import TfidfVectorizer
+    print(f"  Total alerts  : {len(alert_df):,}")
+    print(f"  Clusters found: {n_clusters}")
+    print(f"  Unclustered   : {n_noise} (unique alert types)")
+    print(
+        f"  Reduction     : {len(alert_df):,} alerts -> "
+        f"{n_clusters + n_noise} distinct groups"
+    )
 
-templates = alert_df["top_template"].fillna("unknown").tolist()
+    alert_df.to_parquet(paths["alerts"], engine="pyarrow", index=False)
+    print(f"\nAlerts saved -> {paths['alerts']}")
 
-# TF-IDF vectorize the template strings
-vectorizer = TfidfVectorizer(
-    analyzer="word",
-    token_pattern=r"[a-zA-Z]+",  # words only, ignore <*> tokens
-    max_features=500
-)
-X = vectorizer.fit_transform(templates).toarray()
-X = normalize(X)   # L2 normalize for cosine similarity
+    print("\n-- Top Alert Clusters --")
+    summary = (
+        alert_df.groupby(["cluster_id", "cluster_label"])
+        .agg(
+            count=("anomaly_score", "count"),
+            avg_score=("anomaly_score", "mean"),
+            max_score=("anomaly_score", "max"),
+            critical_count=("severity", lambda x: (x == "CRITICAL").sum()),
+        )
+        .sort_values("count", ascending=False)
+        .head(10)
+    )
+    print(summary.to_string())
+    print("\nDone. Now run: streamlit run app.py")
 
-# DBSCAN — no need to specify number of clusters
-# eps=0.4 means templates need 60%+ similarity to cluster together
-clusterer = DBSCAN(eps=0.5, min_samples=2, metric="cosine")
-labels = clusterer.fit_predict(X)
-unique_labels = labels.copy()
-noise_positions = np.where(unique_labels == -1)[0]
-for noise_number, row_index in enumerate(noise_positions, start=1):
-    unique_labels[row_index] = -noise_number
 
-alert_df["cluster_id"] = unique_labels
-
-n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-n_noise    = int((labels == -1).sum())
-
-print(f"  Total alerts  : {len(alert_df):,}")
-print(f"  Clusters found: {n_clusters}")
-print(f"  Unclustered   : {n_noise} (unique alert types)")
-print(f"  Reduction     : {len(alert_df):,} alerts -> "
-      f"{n_clusters + n_noise} distinct groups")
-
-# ── Step 3: Add cluster labels ─────────────────────────────────────
-# For each cluster find the most representative template
-cluster_labels = {}
-for cid in set(unique_labels):
-    if cid < 0:
-        continue
-    cluster_members = alert_df[alert_df["cluster_id"] == cid]
-    # Most common template in this cluster = cluster name
-    cluster_labels[cid] = (cluster_members["top_template"]
-                           .value_counts().index[0][:60])
-
-alert_df["cluster_label"] = alert_df.apply(
-    lambda row: (
-        f"Unique: {str(row['top_template'])[:40]}"
-        if row["cluster_id"] < 0
-        else cluster_labels.get(row["cluster_id"], "Unknown")
-    ),
-    axis=1,
-)
-
-alert_df.to_parquet(ALERTS, engine="pyarrow", index=False)
-print(f"\nAlerts saved -> {ALERTS}")
-
-# ── Step 4: Print cluster summary ─────────────────────────────────
-print("\n-- Top Alert Clusters --")
-summary = (alert_df
-           .groupby(["cluster_id", "cluster_label"])
-           .agg(
-               count         = ("anomaly_score", "count"),
-               avg_score     = ("anomaly_score", "mean"),
-               max_score     = ("anomaly_score", "max"),
-               critical_count= ("severity",
-                                lambda x: (x=="CRITICAL").sum())
-           )
-           .sort_values("count", ascending=False)
-           .head(10))
-print(summary.to_string())
-print("\nDone. Now run: streamlit run app.py")
+if __name__ == "__main__":
+    main()

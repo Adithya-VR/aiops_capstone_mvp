@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+from dataset_config import project_path
+
 
 DATASET_NAME = "bgl"
 HAS_LABELS = True
@@ -32,8 +34,28 @@ BGL_RE_SHORT = re.compile(
 
 
 def get_source_path() -> Path | None:
-    path = Path("data/BGL.log")
+    path = project_path("data/BGL.log")
     return path if path.exists() else None
+
+
+def get_source_paths() -> list[Path]:
+    paths = []
+    primary = get_source_path()
+    if primary:
+        paths.append(primary)
+
+    data_dir = project_path("data/BGL")
+    if data_dir.exists():
+        paths.extend(sorted(data_dir.glob("*.log")))
+
+    seen = set()
+    unique_paths = []
+    for path in paths:
+        resolved = path.resolve()
+        if resolved not in seen:
+            unique_paths.append(path)
+            seen.add(resolved)
+    return unique_paths
 
 
 def reset_parser_state() -> None:

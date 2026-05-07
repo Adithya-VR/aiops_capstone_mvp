@@ -1,32 +1,21 @@
-# alerts_minilm.py
-# Runs MiniLM-based alert clustering alongside existing TF-IDF results
-# For comparison purposes — does NOT replace alerts.py
-
-import pandas as pd
-import numpy as np
 import argparse
 import json
-from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
-from sklearn.metrics import silhouette_score
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import normalize
+
+from alert_generation import generate_alerts
 from dataset_config import DEFAULT_DATASET, dataset_paths, get_dataset
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--dataset", default=DEFAULT_DATASET)
-args = parser.parse_args()
-CFG = get_dataset(args.dataset)
-PATHS = dataset_paths(args.dataset)
-HAS_LABELS = bool(CFG.get("has_labels", True))
-
-SCORES  = PATHS["scores"]
-PARSED  = PATHS["parsed"]
-OUT     = PATHS["alerts_minilm"]
-
-print("Loading data...")
-scores = pd.read_parquet(SCORES, engine="pyarrow")
-parsed = pd.read_parquet(PARSED, engine="pyarrow")
+TFIDF_EPS = 0.5
+MINILM_EPS = 0.4
+MIN_SAMPLES = 2
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 def assign_unique_noise_ids(labels):
@@ -36,206 +25,146 @@ def assign_unique_noise_ids(labels):
         labels[row_index] = -noise_number
     return labels
 
-# ── Generate alerts (same logic as alerts.py) ──────────────────────
-p95 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.95)
-p85 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.85)
-p70 = scores[scores["predicted"]==1]["anomaly_score"].quantile(0.70)
 
-anomalous = scores[scores["predicted"] == 1].copy()
-print(f"Anomalous windows: {len(anomalous):,}")
+def silhouette_without_noise(matrix, labels, metric: str) -> float:
+    mask = labels != -1
+    if mask.sum() > 1 and len(set(labels[mask])) > 1:
+        return float(silhouette_score(matrix[mask], labels[mask], metric=metric))
+    return 0.0
 
-alerts = []
-for _, row in anomalous.iterrows():
-    window_logs = parsed[
-        (parsed["timestamp"] >= row["window_start"]) &
-        (parsed["timestamp"] <  row["window_end"])
-    ]
-    if HAS_LABELS:
-        representative_logs = window_logs[window_logs["is_anomaly"] == 1]
-        if representative_logs.empty:
-            representative_logs = window_logs
-    else:
-        representative_logs = window_logs
-    if representative_logs.empty:
-        continue
 
-    top_template = (representative_logs["template"]
-                    .value_counts().index[0])
+def run_dbscan(matrix, eps: float, metric: str) -> tuple[np.ndarray, int, int, float]:
+    labels = DBSCAN(
+        eps=eps,
+        min_samples=MIN_SAMPLES,
+        metric=metric,
+    ).fit_predict(matrix)
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    n_noise = int((labels == -1).sum())
+    sil = silhouette_without_noise(matrix, labels, metric)
+    return labels, n_clusters, n_noise, sil
 
-    if row["anomaly_score"] >= p95:
-        severity = "CRITICAL"
-    elif row["anomaly_score"] >= p85:
-        severity = "HIGH"
-    elif row["anomaly_score"] >= p70:
-        severity = "MEDIUM"
-    else:
-        severity = "LOW"
 
-    alerts.append({
-        "window_start":  row["window_start"],
-        "window_end":    row["window_end"],
-        "anomaly_score": row["anomaly_score"],
-        "anomaly_count": row["anomaly_count"],
-        "total_logs":    row["total_logs"],
-        "severity":      severity,
-        "top_template":  top_template,
-    })
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default=DEFAULT_DATASET)
+    args = parser.parse_args()
 
-alert_df = pd.DataFrame(alerts)
-print(f"Alerts generated: {len(alert_df):,}")
-templates = alert_df["top_template"].fillna("unknown").tolist()
+    cfg = get_dataset(args.dataset)
+    paths = dataset_paths(args.dataset)
+    has_labels = bool(cfg.get("has_labels", True))
 
-# ══════════════════════════════════════════════════════════════════
-# METHOD 1: TF-IDF + DBSCAN (existing approach)
-# ══════════════════════════════════════════════════════════════════
-print("\n-- Method 1: TF-IDF + DBSCAN --")
+    print("Loading data...")
+    scores = pd.read_parquet(paths["scores"], engine="pyarrow")
+    parsed = pd.read_parquet(paths["parsed"], engine="pyarrow")
+    alert_df = generate_alerts(scores, parsed, has_labels)
+    print(f"Alerts generated: {len(alert_df):,}")
 
-vectorizer = TfidfVectorizer(
-    analyzer="word",
-    token_pattern=r"[a-zA-Z]+",
-    max_features=500
-)
-X_tfidf  = vectorizer.fit_transform(templates).toarray()
-X_tfidf  = normalize(X_tfidf)
+    if alert_df.empty:
+        alert_df["cluster_id_tfidf"] = []
+        alert_df["cluster_id_minilm"] = []
+        alert_df.to_parquet(paths["alerts_minilm"], engine="pyarrow", index=False)
+        paths["clustering_comparison"].write_text(
+            json.dumps(
+                {
+                    "tfidf_eps": TFIDF_EPS,
+                    "minilm_eps": MINILM_EPS,
+                    "min_samples": MIN_SAMPLES,
+                    "tfidf_silhouette": 0.0,
+                    "minilm_silhouette": 0.0,
+                    "tfidf_clusters": 0,
+                    "tfidf_unique": 0,
+                    "minilm_clusters": 0,
+                    "minilm_unique": 0,
+                    "methodology": "DBSCAN with cosine distance; silhouette excludes noise points.",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return
 
-tfidf_labels = DBSCAN(
-    eps=0.5, min_samples=2, metric="cosine"
-).fit_predict(X_tfidf)
+    templates = alert_df["top_template"].fillna("unknown").tolist()
 
-n_tfidf_clusters = len(set(tfidf_labels)) - \
-                   (1 if -1 in tfidf_labels else 0)
-n_tfidf_noise    = int((tfidf_labels == -1).sum())
-tfidf_output_labels = assign_unique_noise_ids(tfidf_labels)
-
-print(f"  Clusters  : {n_tfidf_clusters}")
-print(f"  Unique    : {n_tfidf_noise}")
-print(f"  Groups    : {n_tfidf_clusters + n_tfidf_noise}")
-print(f"  Reduction : {len(alert_df):,} -> "
-      f"{n_tfidf_clusters + n_tfidf_noise} groups "
-      f"({(1-(n_tfidf_clusters+n_tfidf_noise)/len(alert_df)):.1%})")
-
-# Silhouette score for TF-IDF
-# if len(set(tfidf_labels)) > 1:
-#     tfidf_sil = silhouette_score(
-#         X_tfidf, tfidf_labels, metric="cosine"
-#     )
-#     print(f"  Silhouette: {tfidf_sil:.4f}")
-# else:
-#     tfidf_sil = 0
-#     print(f"  Silhouette: N/A (only 1 cluster)")
-
-# Silhouette score for TF-IDF — exclude noise points (label = -1)
-tfidf_mask = tfidf_labels != -1
-if tfidf_mask.sum() > 1 and len(set(tfidf_labels[tfidf_mask])) > 1:
-    tfidf_sil = silhouette_score(
-        X_tfidf[tfidf_mask], tfidf_labels[tfidf_mask],
-        metric="cosine"
+    print("\n-- Method 1: TF-IDF + DBSCAN --")
+    vectorizer = TfidfVectorizer(
+        analyzer="word",
+        token_pattern=r"[a-zA-Z]+",
+        max_features=500,
     )
+    x_tfidf = normalize(vectorizer.fit_transform(templates).toarray())
+    tfidf_labels, n_tfidf_clusters, n_tfidf_noise, tfidf_sil = run_dbscan(
+        x_tfidf,
+        eps=TFIDF_EPS,
+        metric="cosine",
+    )
+    print(f"  eps       : {TFIDF_EPS}")
+    print(f"  Clusters  : {n_tfidf_clusters}")
+    print(f"  Unique    : {n_tfidf_noise}")
     print(f"  Silhouette: {tfidf_sil:.4f} (noise points excluded)")
-else:
-    tfidf_sil = 0.0
-    print(f"  Silhouette: N/A")
 
-# ══════════════════════════════════════════════════════════════════
-# METHOD 2: MiniLM + DBSCAN (new approach)
-# ══════════════════════════════════════════════════════════════════
-print("\n-- Method 2: MiniLM + DBSCAN --")
-print("  Loading sentence-transformers/all-MiniLM-L6-v2...")
-print("  (Downloads ~80MB on first run, cached after)")
-
-from sentence_transformers import SentenceTransformer
-
-encoder    = SentenceTransformer(
-    "sentence-transformers/all-MiniLM-L6-v2"
-)
-embeddings = encoder.encode(
-    templates,
-    batch_size=64,
-    show_progress_bar=True,
-    normalize_embeddings=True
-)
-
-minilm_labels = DBSCAN(
-    eps=0.4, min_samples=2, metric="cosine"
-).fit_predict(embeddings)
-
-n_minilm_clusters = len(set(minilm_labels)) - \
-                    (1 if -1 in minilm_labels else 0)
-n_minilm_noise    = int((minilm_labels == -1).sum())
-minilm_output_labels = assign_unique_noise_ids(minilm_labels)
-
-print(f"\n  Clusters  : {n_minilm_clusters}")
-print(f"  Unique    : {n_minilm_noise}")
-print(f"  Groups    : {n_minilm_clusters + n_minilm_noise}")
-print(f"  Reduction : {len(alert_df):,} -> "
-      f"{n_minilm_clusters + n_minilm_noise} groups "
-      f"({(1-(n_minilm_clusters+n_minilm_noise)/len(alert_df)):.1%})")
-
-# Silhouette score for MiniLM
-# if len(set(minilm_labels)) > 1:
-#     minilm_sil = silhouette_score(
-#         embeddings, minilm_labels, metric="cosine"
-#     )
-#     print(f"  Silhouette: {minilm_sil:.4f}")
-# else:
-#     minilm_sil = 0
-#     print(f"  Silhouette: N/A (only 1 cluster)")
-
-# Silhouette score for MiniLM — exclude noise points (label = -1)
-minilm_mask = minilm_labels != -1
-if minilm_mask.sum() > 1 and len(set(minilm_labels[minilm_mask])) > 1:
-    minilm_sil = silhouette_score(
-        embeddings[minilm_mask], minilm_labels[minilm_mask],
-        metric="cosine"
+    print("\n-- Method 2: MiniLM + DBSCAN --")
+    print(f"  Loading {MODEL_NAME}...")
+    encoder = SentenceTransformer(MODEL_NAME)
+    embeddings = encoder.encode(
+        templates,
+        batch_size=64,
+        show_progress_bar=True,
+        normalize_embeddings=True,
     )
+    minilm_labels, n_minilm_clusters, n_minilm_noise, minilm_sil = run_dbscan(
+        embeddings,
+        eps=MINILM_EPS,
+        metric="cosine",
+    )
+    print(f"  eps       : {MINILM_EPS}")
+    print(f"  Clusters  : {n_minilm_clusters}")
+    print(f"  Unique    : {n_minilm_noise}")
     print(f"  Silhouette: {minilm_sil:.4f} (noise points excluded)")
-else:
-    minilm_sil = 0.0
-    print(f"  Silhouette: N/A")
 
-# ══════════════════════════════════════════════════════════════════
-# COMPARISON
-# ══════════════════════════════════════════════════════════════════
-print("\n-- Comparison Summary --")
-print(f"{'Metric':<25} {'TF-IDF':>10} {'MiniLM':>10} {'Winner':>10}")
-print("-" * 55)
+    tfidf_groups = n_tfidf_clusters + n_tfidf_noise
+    minilm_groups = n_minilm_clusters + n_minilm_noise
 
-tfidf_groups  = n_tfidf_clusters  + n_tfidf_noise
-minilm_groups = n_minilm_clusters + n_minilm_noise
+    print("\n-- Comparison Summary --")
+    print(f"{'Metric':<25} {'TF-IDF':>10} {'MiniLM':>10}")
+    print("-" * 48)
+    print(f"{'Clusters found':<25} {n_tfidf_clusters:>10} {n_minilm_clusters:>10}")
+    print(f"{'Unique alerts':<25} {n_tfidf_noise:>10} {n_minilm_noise:>10}")
+    print(f"{'Total groups':<25} {tfidf_groups:>10} {minilm_groups:>10}")
+    print(
+        f"{'Noise reduction':<25} "
+        f"{(1 - tfidf_groups / len(alert_df)):>10.1%} "
+        f"{(1 - minilm_groups / len(alert_df)):>10.1%}"
+    )
+    print(f"{'Silhouette score':<25} {tfidf_sil:>10.4f} {minilm_sil:>10.4f}")
 
-print(f"{'Clusters found':<25} {n_tfidf_clusters:>10} "
-      f"{n_minilm_clusters:>10}")
-print(f"{'Unique alerts':<25} {n_tfidf_noise:>10} "
-      f"{n_minilm_noise:>10}")
-print(f"{'Total groups':<25} {tfidf_groups:>10} "
-      f"{minilm_groups:>10}")
-print(
-    f"{'Noise reduction':<25} "
-    f"{(1 - tfidf_groups / len(alert_df)):>10.1%} "
-    f"{(1 - minilm_groups / len(alert_df)):>10.1%}"
-)
-print(f"{'Silhouette score':<25} {tfidf_sil:>10.4f} "
-      f"{minilm_sil:>10.4f} "
-      f"{'MiniLM' if minilm_sil > tfidf_sil else 'TF-IDF':>10}")
+    alert_df["cluster_id_tfidf"] = assign_unique_noise_ids(tfidf_labels)
+    alert_df["cluster_id_minilm"] = assign_unique_noise_ids(minilm_labels)
+    alert_df.to_parquet(paths["alerts_minilm"], engine="pyarrow", index=False)
+    print(f"\nComparison results saved -> {paths['alerts_minilm']}")
 
-# ── Save MiniLM results ────────────────────────────────────────────
-alert_df["cluster_id_tfidf"]   = tfidf_output_labels
-alert_df["cluster_id_minilm"]  = minilm_output_labels
-alert_df.to_parquet(OUT, engine="pyarrow", index=False)
-print(f"\nComparison results saved -> {OUT}")
-print("\nDecision: if MiniLM silhouette > TF-IDF silhouette,")
-print("replace alerts.py clustering with MiniLM.")
-print("Otherwise keep TF-IDF.")
+    scores_out = {
+        "tfidf_eps": TFIDF_EPS,
+        "minilm_eps": MINILM_EPS,
+        "min_samples": MIN_SAMPLES,
+        "tfidf_silhouette": round(float(tfidf_sil), 4),
+        "minilm_silhouette": round(float(minilm_sil), 4),
+        "tfidf_clusters": n_tfidf_clusters,
+        "tfidf_unique": n_tfidf_noise,
+        "minilm_clusters": n_minilm_clusters,
+        "minilm_unique": n_minilm_noise,
+        "methodology": (
+            "DBSCAN with cosine distance. TF-IDF and MiniLM use separate eps "
+            "values because their vector spaces have different distance scales; "
+            "silhouette is computed after excluding DBSCAN noise points."
+        ),
+    }
+    paths["clustering_comparison"].write_text(
+        json.dumps(scores_out, indent=2),
+        encoding="utf-8",
+    )
+    print(f"Scores saved -> {paths['clustering_comparison']}")
 
-scores_out = {
-    "tfidf_silhouette":  round(float(tfidf_sil), 4),
-    "minilm_silhouette": round(float(minilm_sil), 4),
-    "tfidf_clusters":    n_tfidf_clusters,
-    "tfidf_unique":      n_tfidf_noise,
-    "minilm_clusters":   n_minilm_clusters,
-    "minilm_unique":     n_minilm_noise,
-}
-PATHS["clustering_comparison"].write_text(
-    json.dumps(scores_out, indent=2)
-)
-print(f"\nScores saved -> {PATHS['clustering_comparison']}")
+
+if __name__ == "__main__":
+    main()
