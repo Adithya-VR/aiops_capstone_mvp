@@ -372,6 +372,23 @@ with t3:
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Score vs Log Volume")
+        timeline["Window Start"] = timeline["window_start"].apply(unix_to_readable)
+        timeline["Window End"] = timeline["window_end"].apply(unix_to_readable)
+        timeline["Day"] = pd.to_datetime(
+            timeline["window_start"], unit="s", utc=True
+        ).dt.strftime("%Y-%m-%d")
+        timeline["Prediction"] = timeline["predicted"].map(
+            {0: "Not Flagged", 1: "Flagged"}
+        )
+        timeline["Ground Truth"] = timeline["is_anomaly"].map(
+            {0: "Normal", 1: "Anomaly"}
+        )
+        color_mode = st.radio(
+            "Color by",
+            ["Ground Truth" if HAS_LABELS else "Prediction", "Time"],
+            horizontal=True,
+            key=f"{DATASET}_score_volume_color",
+        )
         point_color = (
             timeline["is_anomaly"].map({0: "Normal", 1: "Anomaly"})
             if HAS_LABELS
@@ -382,19 +399,57 @@ with t3:
             if HAS_LABELS
             else {"Not Flagged": "#1D9E75", "Flagged": "#E24B4A"}
         )
-        fig = px.scatter(
-            timeline,
-            x="total_logs",
-            y="anomaly_score",
-            color=point_color,
-            color_discrete_map=color_map,
-            opacity=0.6,
-            labels={
-                "total_logs": "Logs in Window",
-                "anomaly_score": "Anomaly Score",
-                "color": "Ground Truth" if HAS_LABELS else "Prediction",
-            },
-        )
+        if color_mode == "Time":
+            fig = px.scatter(
+                timeline,
+                x="total_logs",
+                y="anomaly_score",
+                color="Day",
+                opacity=0.65,
+                hover_data={
+                    "Window Start": True,
+                    "Window End": True,
+                    "Prediction": True,
+                    "Ground Truth": HAS_LABELS,
+                    "total_logs": ":,",
+                    "anomaly_score": ":.4f",
+                    "window_start": False,
+                    "window_end": False,
+                    "is_anomaly": False,
+                    "predicted": False,
+                },
+                labels={
+                    "total_logs": "Logs in Window",
+                    "anomaly_score": "Anomaly Score",
+                    "Day": "Window Day",
+                },
+            )
+        else:
+            fig = px.scatter(
+                timeline,
+                x="total_logs",
+                y="anomaly_score",
+                color=point_color,
+                color_discrete_map=color_map,
+                opacity=0.6,
+                hover_data={
+                    "Window Start": True,
+                    "Window End": True,
+                    "Prediction": True,
+                    "Ground Truth": HAS_LABELS,
+                    "total_logs": ":,",
+                    "anomaly_score": ":.4f",
+                    "window_start": False,
+                    "window_end": False,
+                    "is_anomaly": False,
+                    "predicted": False,
+                },
+                labels={
+                    "total_logs": "Logs in Window",
+                    "anomaly_score": "Anomaly Score",
+                    "color": "Ground Truth" if HAS_LABELS else "Prediction",
+                },
+            )
         st.plotly_chart(fig, use_container_width=True)
     with col2:
         if HAS_LABELS:
