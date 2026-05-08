@@ -1,5 +1,6 @@
 import unittest
 
+import _bootstrap  # noqa: F401
 from dataset_config import DATASETS, PROJECT_ROOT, available_datasets, dataset_paths, get_dataset
 
 

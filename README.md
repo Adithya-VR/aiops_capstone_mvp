@@ -275,7 +275,13 @@ Streamlit dashboard
 Run unit/integration tests:
 
 ```powershell
-python -m unittest discover -s tests
+python -m unittest discover -s tests -v
+```
+
+Generate report-friendly test output:
+
+```powershell
+python run_tests.py
 ```
 
 Run smoke tests:
@@ -298,6 +304,12 @@ python feature_verify.py --dataset bgl
 python feature_verify.py --dataset openssh
 ```
 
+`run_tests.py` writes detailed results to:
+
+- `reports/test_results.md`
+- `reports/test_results.txt`
+- `reports/test_results.json`
+
 The `tests/` suite covers:
 
 - BGL and OpenSSH parser behavior.
@@ -305,6 +317,45 @@ The `tests/` suite covers:
 - Dataset configuration and project-root path anchoring.
 - FastAPI health, dataset, log, metrics, and cluster endpoints.
 - Processed artifact integrity and feature-window configuration.
+- Model-output integrity, prediction validity, and labeled/unlabeled metric modes.
+
+## Viewing and Exporting Parsed Logs/Templates
+
+View the first rows of a parsed artifact:
+
+```powershell
+python -c "import pandas as pd; df=pd.read_parquet('output/bgl/parsed.parquet'); print(df.head(20).to_string())"
+```
+
+For OpenSSH:
+
+```powershell
+python -c "import pandas as pd; df=pd.read_parquet('output/openssh/parsed.parquet'); print(df.head(20).to_string())"
+```
+
+Export all parsed rows to CSV:
+
+```powershell
+python -c "import pandas as pd; pd.read_parquet('output/bgl/parsed.parquet').to_csv('output/bgl/parsed.csv', index=False)"
+```
+
+Export Drain templates to CSV:
+
+```powershell
+python -c "import pandas as pd; df=pd.read_parquet('output/bgl/parsed.parquet'); df.groupby(['event_id','template']).size().reset_index(name='count').sort_values('count', ascending=False).to_csv('output/bgl/templates.csv', index=False)"
+```
+
+For OpenSSH:
+
+```powershell
+python -c "import pandas as pd; df=pd.read_parquet('output/openssh/parsed.parquet'); df.groupby(['event_id','template']).size().reset_index(name='count').sort_values('count', ascending=False).to_csv('output/openssh/templates.csv', index=False)"
+```
+
+You can also inspect Parquet files with DuckDB:
+
+```powershell
+python -c "import duckdb; print(duckdb.sql(\"SELECT * FROM 'output/bgl/parsed.parquet' LIMIT 20\").df().to_string())"
+```
 
 ## Notes on Alert Clustering
 

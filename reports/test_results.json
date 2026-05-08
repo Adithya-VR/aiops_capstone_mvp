@@ -1,0 +1,139 @@
+{
+  "summary": {
+    "generated_at": "2026-05-08T05:57:12+00:00",
+    "total": 25,
+    "passed": 25,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "duration_seconds": 7.92,
+    "successful": true
+  },
+  "results": [
+    {
+      "status": "PASS",
+      "test": "test_alert_generation.AlertGenerationTests.test_generate_alerts_includes_top_level",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_alert_generation.AlertGenerationTests.test_labeled_dataset_prefers_anomalous_representative_logs",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_alert_generation.AlertGenerationTests.test_severity_thresholds",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_api.APITests.test_log_search_and_cluster_filters_accept_user_input",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_api.APITests.test_missing_artifact_endpoint_uses_http_error",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_api.APITests.test_ready_dataset_endpoints",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_api.APITests.test_root_and_dataset_listing",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_api.APITests.test_unknown_dataset_returns_404",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_artifacts.ArtifactIntegrityTests.test_alert_artifact_schemas",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_artifacts.ArtifactIntegrityTests.test_feature_window_configuration",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_artifacts.ArtifactIntegrityTests.test_metrics_match_scores",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_config.DatasetConfigTests.test_available_datasets_shape",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_config.DatasetConfigTests.test_known_datasets_exist",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_config.DatasetConfigTests.test_paths_are_project_root_anchored",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_config.DatasetConfigTests.test_unknown_dataset_raises_key_error",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_model_outputs.ModelOutputTests.test_labeled_and_unlabeled_metric_modes_are_separate",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_model_outputs.ModelOutputTests.test_metrics_match_model_outputs",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_model_outputs.ModelOutputTests.test_openssh_uses_unlabeled_prediction_policy",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_model_outputs.ModelOutputTests.test_scores_are_valid_and_predictions_are_binary",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_model_outputs.ModelOutputTests.test_scores_have_required_model_columns",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_parsers.BGLParserTests.test_parses_empty_fatal_content",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_parsers.BGLParserTests.test_parses_labeled_failure_as_anomaly",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_parsers.OpenSSHParserTests.test_non_sshd_line_is_skipped",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_parsers.OpenSSHParserTests.test_parses_invalid_user_and_source_ip",
+      "notes": ""
+    },
+    {
+      "status": "PASS",
+      "test": "test_parsers.OpenSSHParserTests.test_unrecognized_month_is_rejected",
+      "notes": ""
+    }
+  ]
+}

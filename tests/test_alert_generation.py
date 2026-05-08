@@ -2,6 +2,7 @@ import unittest
 
 import pandas as pd
 
+import _bootstrap  # noqa: F401
 from alert_generation import generate_alerts, severity_for_score
 
 

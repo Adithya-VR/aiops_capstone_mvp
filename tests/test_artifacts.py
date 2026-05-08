@@ -3,6 +3,7 @@ import unittest
 
 import pandas as pd
 
+import _bootstrap  # noqa: F401
 from dataset_config import DATASETS, dataset_paths, get_dataset
 
 

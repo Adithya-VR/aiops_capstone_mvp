@@ -2,6 +2,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
+import _bootstrap  # noqa: F401
 from api.main import app
 from dataset_config import DATASETS, dataset_paths
 

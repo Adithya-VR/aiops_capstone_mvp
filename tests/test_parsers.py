@@ -1,5 +1,6 @@
 import unittest
 
+import _bootstrap  # noqa: F401
 from parsers import bgl, openssh
 
 
